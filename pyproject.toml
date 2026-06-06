@@ -9,6 +9,7 @@ packages = [{ include = "bookhound", from = "src" }]
 [tool.poetry.dependencies]
 python = "^3.12"
 typer = "^0.16.0"
+pydantic = "^2.13.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.0"
@@ -23,3 +24,6 @@ build-backend = "poetry.core.masonry.api"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "revised: marks tests that have been reviewed and must not be edited without explicit user instruction",
+]
