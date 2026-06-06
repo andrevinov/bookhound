@@ -29,6 +29,22 @@ Keep the implementation incremental and testable. Each task should be small
 enough to have focused unit tests and should avoid real network calls in the
 unit test suite.
 
+## Personal implementation workflow
+
+For each task in `docs/implementation-tasks.md`, use this workflow:
+
+1. Start by writing the tests for the task.
+2. Stop after the tests are written so the user can review them.
+3. The user will mark reviewed tests with `pytest.mark.revised`.
+4. After the reviewed tests are marked, implement the production code that
+   makes those tests pass.
+5. Once the implementation passes the reviewed tests, consider the task
+   complete and move to the next task only when requested.
+
+Do not implement production code for a task before its tests have been reviewed
+and marked with `pytest.mark.revised`, unless the user explicitly changes this
+workflow.
+
 ## Safety rules
 
 - `collect` must never download PDFs.
