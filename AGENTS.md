@@ -1,0 +1,38 @@
+# Repository Instructions
+
+## Language
+
+All repository content must be written in English.
+
+This includes:
+
+- documentation;
+- code comments;
+- inline help text;
+- CLI command descriptions;
+- test names and test data, unless the test explicitly validates multilingual
+  search behavior;
+- commit messages and pull request descriptions;
+- issue templates and future project-management files.
+
+User-facing examples may include non-English search keywords when they are
+relevant to Bookhound's PDF discovery behavior, but the surrounding explanation
+must remain in English.
+
+## Project direction
+
+Bookhound is a Python CLI for discovering PDFs by keyword, storing URLs and
+metadata in SQLite, and downloading files only when the active mode and license
+policy allow it.
+
+Keep the implementation incremental and testable. Each task should be small
+enough to have focused unit tests and should avoid real network calls in the
+unit test suite.
+
+## Safety rules
+
+- `collect` must never download PDFs.
+- `download` must always pass through the license gate.
+- `daemon` must be non-interactive and conservative.
+- External source integrations must use fixtures or mocks in unit tests.
+- Do not bypass paywalls, logins, captchas, robots policies, or access blocks.
