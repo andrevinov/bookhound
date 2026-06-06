@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "bookhound"
+version = "0.1.0"
+description = "A license-aware CLI for discovering PDFs by keyword, storing URLs and metadata in SQLite, and downloading files only when permitted."
+authors = ["Andre <andre@example.com>"]
+license = "MIT"
+packages = [{ include = "bookhound", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+typer = "^0.16.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.0"
+
+[tool.poetry.scripts]
+bookhound = "bookhound.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
