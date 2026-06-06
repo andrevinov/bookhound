@@ -45,6 +45,10 @@ Do not implement production code for a task before its tests have been reviewed
 and marked with `pytest.mark.revised`, unless the user explicitly changes this
 workflow.
 
+Never modify the code of a test marked with `pytest.mark.revised` under any
+circumstance, unless the user gives a clear affirmative instruction explicitly
+asking for that revised test to be changed.
+
 ## Safety rules
 
 - `collect` must never download PDFs.
