@@ -293,3 +293,27 @@ def test_model_dump_preserves_expected_json_fields() -> None:
     assert dumped["evidence"][0]["source"] == "unpaywall"
     assert dumped["evidence"][0]["suggested_status"] == "allowed"
     assert dumped["decided_at"] == "2026-06-06T12:01:00Z"
+
+
+@pytest.mark.revised
+def test_manual_authorization_license_status_serializes_as_expected() -> None:
+    evidence = LicenseEvidence(
+        source="user",
+        evidence_type="manual_authorization",
+        value="Repository owner granted download permission by email on 2026-06-07.",
+        suggested_status=LicenseStatus.MANUALLY_AUTHORIZED,
+        confidence=1.0,
+        collected_at=datetime(2026, 6, 7, 9, 0, tzinfo=timezone.utc),
+    )
+    decision = LicenseDecision(
+        status=LicenseStatus.MANUALLY_AUTHORIZED,
+        reason="The user recorded explicit permission from the repository owner.",
+        evidence=[evidence],
+        decided_at=datetime(2026, 6, 7, 9, 5, tzinfo=timezone.utc),
+    )
+
+    dumped = decision.model_dump(mode="json")
+
+    assert dumped["status"] == "manually_authorized"
+    assert dumped["evidence"][0]["suggested_status"] == "manually_authorized"
+    assert dumped["evidence"][0]["evidence_type"] == "manual_authorization"

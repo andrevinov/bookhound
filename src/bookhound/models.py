@@ -42,6 +42,7 @@ class LicenseStatus(str, Enum):
     ALLOWED = "allowed"
     DENIED = "denied"
     UNKNOWN = "unknown"
+    MANUALLY_AUTHORIZED = "manually_authorized"
 
 
 class DownloadStatus(str, Enum):
