@@ -14,6 +14,8 @@ from bookhound.models import (
     LicenseStatus,
     RawCandidate,
     SearchQuery,
+    DiscoveryMethod,
+    SourceKind,
     SourceResult,
     UrlType,
 )
@@ -29,7 +31,8 @@ def test_domain_models_accept_valid_data() -> None:
     candidate = RawCandidate(
         title="Machine Learning Notes",
         url="https://example.org/notes.pdf",
-        source="fake-source",
+        source=SourceKind.COMMON_CRAWL,
+        discovery_method=DiscoveryMethod.PUBLIC_INDEX,
         query=query.keyword,
         snippet="Lecture notes about machine learning.",
         score=0.87,
@@ -48,7 +51,8 @@ def test_domain_models_accept_valid_data() -> None:
     document_url = DocumentUrl(
         url="https://example.org/notes.pdf",
         canonical_url="https://example.org/notes.pdf",
-        source="fake-source",
+        source=SourceKind.COMMON_CRAWL,
+        discovery_method=DiscoveryMethod.PUBLIC_INDEX,
         url_type=UrlType.PDF,
         confidence=0.95,
         discovered_at=datetime(2026, 6, 6, 12, 2, tzinfo=timezone.utc),
@@ -77,7 +81,8 @@ def test_domain_models_accept_valid_data() -> None:
         downloaded_at=datetime(2026, 6, 6, 12, 5, tzinfo=timezone.utc),
     )
     source_result = SourceResult(
-        source="fake-source",
+        source=SourceKind.COMMON_CRAWL,
+        discovery_method=DiscoveryMethod.PUBLIC_INDEX,
         candidates=[candidate],
         errors=[],
         fetched_at=datetime(2026, 6, 6, 12, 6, tzinfo=timezone.utc),
@@ -85,10 +90,46 @@ def test_domain_models_accept_valid_data() -> None:
 
     assert query.mode is ExecutionMode.SEARCH
     assert candidate.metadata["doi"] == document.doi
+    assert candidate.source is SourceKind.COMMON_CRAWL
+    assert candidate.discovery_method is DiscoveryMethod.PUBLIC_INDEX
     assert document_url.url_type is UrlType.PDF
+    assert document_url.source is SourceKind.COMMON_CRAWL
     assert decision.status is LicenseStatus.ALLOWED
     assert download.status is DownloadStatus.DOWNLOADED
     assert source_result.candidates == [candidate]
+    assert source_result.discovery_method is DiscoveryMethod.PUBLIC_INDEX
+
+
+@pytest.mark.revised
+def test_domain_models_accept_expanded_discovery_sources() -> None:
+    source_methods = [
+        (SourceKind.GOOGLE, DiscoveryMethod.API),
+        (SourceKind.ARXIV, DiscoveryMethod.API),
+        (SourceKind.UNPAYWALL, DiscoveryMethod.ENRICHMENT),
+        (SourceKind.COMMON_CRAWL, DiscoveryMethod.PUBLIC_INDEX),
+        (SourceKind.SEED_CRAWLER, DiscoveryMethod.CRAWL),
+        (SourceKind.SITEMAP, DiscoveryMethod.SITEMAP),
+        (SourceKind.LINK_EXPANSION, DiscoveryMethod.LINK_EXPANSION),
+    ]
+
+    for source, discovery_method in source_methods:
+        candidate = RawCandidate(
+            title=f"{source.value} result",
+            url=f"https://example.org/{source.value}.pdf",
+            source=source,
+            discovery_method=discovery_method,
+            query="machine learning",
+        )
+        source_result = SourceResult(
+            source=source,
+            discovery_method=discovery_method,
+            candidates=[candidate],
+        )
+
+        assert candidate.source is source
+        assert candidate.discovery_method is discovery_method
+        assert source_result.source is source
+        assert source_result.discovery_method is discovery_method
 
 
 @pytest.mark.revised
@@ -100,7 +141,8 @@ def test_domain_models_accept_valid_data() -> None:
             {
                 "title": "Empty URL",
                 "url": "",
-                "source": "fake-source",
+                "source": SourceKind.SEED_CRAWLER,
+                "discovery_method": DiscoveryMethod.CRAWL,
                 "query": "empty url",
             },
         ),
@@ -109,7 +151,8 @@ def test_domain_models_accept_valid_data() -> None:
             {
                 "url": "",
                 "canonical_url": "https://example.org/file.pdf",
-                "source": "fake-source",
+                "source": SourceKind.SEED_CRAWLER,
+                "discovery_method": DiscoveryMethod.CRAWL,
                 "url_type": UrlType.PDF,
             },
         ),
@@ -138,8 +181,27 @@ def test_url_backed_models_reject_empty_urls(model_type: type, kwargs: dict[str,
             {
                 "url": "https://example.org/file.pdf",
                 "canonical_url": "https://example.org/file.pdf",
-                "source": "fake-source",
+                "source": SourceKind.SITEMAP,
+                "discovery_method": DiscoveryMethod.SITEMAP,
                 "url_type": "invalid-url-type",
+            },
+        ),
+        (
+            RawCandidate,
+            {
+                "title": "Invalid source",
+                "url": "https://example.org/file.pdf",
+                "source": "invalid-source",
+                "discovery_method": DiscoveryMethod.API,
+                "query": "invalid source",
+            },
+        ),
+        (
+            SourceResult,
+            {
+                "source": SourceKind.GOOGLE,
+                "discovery_method": "invalid-discovery-method",
+                "candidates": [],
             },
         ),
         (
@@ -182,7 +244,8 @@ def test_models_reject_invalid_status_values(model_type: type, kwargs: dict[str,
             {
                 "title": "Bad date",
                 "url": "https://example.org/bad-date.pdf",
-                "source": "fake-source",
+                "source": SourceKind.LINK_EXPANSION,
+                "discovery_method": DiscoveryMethod.LINK_EXPANSION,
                 "query": "history",
                 "discovered_at": "not-a-date",
             },

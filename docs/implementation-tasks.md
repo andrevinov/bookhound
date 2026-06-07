@@ -52,6 +52,8 @@ Deliverables:
 - Models for `SearchQuery`, `RawCandidate`, `Document`, `DocumentUrl`,
   `LicenseEvidence`, `LicenseDecision`, `DownloadRecord`, and `SourceResult`.
 - Enums for execution mode, URL type, license status, and download status.
+- Enums for source kind and discovery method, including Google, arXiv,
+  Unpaywall, Common Crawl, seed crawler, sitemap, and link expansion.
 - Basic validation for required fields.
 
 Unit tests:

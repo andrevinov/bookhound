@@ -19,6 +19,25 @@ class UrlType(str, Enum):
     OTHER = "other"
 
 
+class SourceKind(str, Enum):
+    GOOGLE = "google"
+    ARXIV = "arxiv"
+    UNPAYWALL = "unpaywall"
+    COMMON_CRAWL = "common_crawl"
+    SEED_CRAWLER = "seed_crawler"
+    SITEMAP = "sitemap"
+    LINK_EXPANSION = "link_expansion"
+
+
+class DiscoveryMethod(str, Enum):
+    API = "api"
+    PUBLIC_INDEX = "public_index"
+    CRAWL = "crawl"
+    SITEMAP = "sitemap"
+    LINK_EXPANSION = "link_expansion"
+    ENRICHMENT = "enrichment"
+
+
 class LicenseStatus(str, Enum):
     ALLOWED = "allowed"
     DENIED = "denied"
@@ -69,14 +88,15 @@ class SearchQuery(BookhoundModel):
 class RawCandidate(BookhoundModel):
     title: str
     url: str
-    source: str
+    source: SourceKind
+    discovery_method: DiscoveryMethod
     query: str
     snippet: str | None = None
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     discovered_at: datetime = Field(default_factory=_utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("title", "url", "source", "query")
+    @field_validator("title", "url", "query")
     @classmethod
     def validate_required_text(cls, value: str) -> str:
         return _validate_non_empty(value)
@@ -100,13 +120,14 @@ class Document(BookhoundModel):
 class DocumentUrl(BookhoundModel):
     url: str
     canonical_url: str
-    source: str
+    source: SourceKind
+    discovery_method: DiscoveryMethod
     url_type: UrlType
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     discovered_at: datetime = Field(default_factory=_utc_now)
     http_status: int | None = None
 
-    @field_validator("url", "canonical_url", "source")
+    @field_validator("url", "canonical_url")
     @classmethod
     def validate_required_text(cls, value: str) -> str:
         return _validate_non_empty(value)
@@ -155,12 +176,8 @@ class DownloadRecord(BookhoundModel):
 
 
 class SourceResult(BookhoundModel):
-    source: str
+    source: SourceKind
+    discovery_method: DiscoveryMethod
     candidates: list[RawCandidate] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     fetched_at: datetime = Field(default_factory=_utc_now)
-
-    @field_validator("source")
-    @classmethod
-    def validate_source(cls, value: str) -> str:
-        return _validate_non_empty(value)
