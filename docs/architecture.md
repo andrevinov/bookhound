@@ -6,11 +6,12 @@ Bookhound will be a CLI application for discovering PDFs by topic or keyword,
 storing URLs and metadata in a local database, and downloading files only when
 download mode is active and the license policy allows it.
 
-The idea of "searching the whole internet" will be implemented as a composition
-of sources: search APIs, public indexes, academic repositories, digital
-libraries, and lightweight crawling. The system should not depend on one
-monolithic scraper. It should use independent discovery adapters, each with its
-own limits, credentials, and usage rules.
+The idea of "searching the whole internet" will be implemented as a layered
+discovery strategy: optional search APIs, public web indexes, academic
+repositories, digital libraries, seed-based crawling, sitemap mining, and
+link-graph expansion. The system should not depend on one monolithic scraper or
+one commercial search provider. It should use independent discovery adapters,
+each with its own limits, credentials, and usage rules.
 
 Initial stack:
 
@@ -57,10 +58,26 @@ Responsibilities:
 
 ## Search strategies
 
-### Web search APIs
+### Discovery layers
+
+Bookhound should treat broad web discovery as a combination of complementary
+layers:
+
+- quality layer: academic/open-access sources with structured metadata;
+- scale layer: public indexes such as Common Crawl;
+- targeted crawling layer: configured seed domains, sitemaps, and nearby links;
+- optional search layer: commercial search APIs when credentials and quotas are
+  available;
+- enrichment layer: sources such as Unpaywall, OpenAlex, and Crossref to improve
+  metadata and licensing confidence.
+
+No single layer is expected to represent the entire web. The value of the
+system comes from combining them, deduplicating results, and recording evidence.
+
+### Optional web search APIs
 
 Use configurable adapters for search engines with official APIs, such as Google
-Programmable Search or Bing Web Search, when credentials are available.
+Programmable Search, when credentials are available.
 
 Example queries:
 
@@ -71,9 +88,9 @@ Example queries:
 - `"keyword" site:gov filetype:pdf`
 - variations in Portuguese, English, and topic synonyms.
 
-These sources tend to provide good coverage, but they can have costs, quotas,
-and result limits. They should be treated as one source among several, not as
-the entire system foundation.
+These sources tend to provide good relevance, but they can have costs, quotas,
+result limits, and terms that change over time. They should be treated as
+optional accelerators, not as the system foundation.
 
 ### Common Crawl
 
@@ -92,6 +109,89 @@ Strategies:
 Common Crawl increases scale, but it does not solve licensing automatically.
 Results discovered through it must pass through the same metadata and license
 pipeline.
+
+### Seed-based crawling
+
+Seed-based crawling starts from configured domains or URLs and discovers PDFs
+within a narrow, controlled neighborhood.
+
+Good seed types:
+
+- universities and departmental publication pages;
+- public agency domains;
+- journals and conference sites;
+- institutional repositories;
+- digital libraries;
+- curated lists of trusted open-access sources.
+
+Pros:
+
+- reduces dependency on commercial search APIs;
+- can be highly precise when the seed list is good;
+- works well for recurring home-server jobs;
+- makes rate limits and politeness easier to control.
+
+Cons:
+
+- coverage depends heavily on seed quality;
+- it will not discover the open web well without good starting points;
+- HTML quality varies widely;
+- license evidence still needs separate extraction and enrichment.
+
+### Sitemap mining
+
+Sitemap mining fetches `robots.txt`, `sitemap.xml`, and sitemap indexes from a
+domain, then extracts candidate PDF URLs or landing pages.
+
+Pros:
+
+- lightweight and polite;
+- good for large, organized sites;
+- often avoids crawling unnecessary pages;
+- easy to schedule repeatedly.
+
+Cons:
+
+- many sites do not include PDFs in sitemaps;
+- sitemap freshness is inconsistent;
+- sitemaps rarely include license information;
+- URL relevance still needs scoring.
+
+### Link-graph expansion
+
+Link-graph expansion follows links near already discovered PDFs or landing
+pages, usually within the same domain or within a trusted allowlist.
+
+Pros:
+
+- can discover whole collections from one good result;
+- works well in repositories and publication indexes;
+- naturally grows from known relevant material.
+
+Cons:
+
+- can drift into unrelated pages without strict limits;
+- can create crawler loops or very large frontiers;
+- needs depth, domain, URL-pattern, and page-count caps.
+
+### Search engine HTML scraping
+
+Scraping HTML result pages from search engines is not a planned v1 strategy.
+It may look attractive because it avoids API keys, but it is fragile and often
+conflicts with search-engine terms and anti-abuse systems.
+
+Pros:
+
+- can provide relevant initial URLs without API credentials;
+- may feel closer to broad web search in small manual experiments.
+
+Cons:
+
+- high risk of captchas, IP blocks, and unstable behavior;
+- page markup changes frequently;
+- difficult to test and operate in daemon mode;
+- may violate terms of service;
+- poorly aligned with Bookhound's license-aware and respectful-crawling goals.
 
 ### Academic and open-access repositories
 

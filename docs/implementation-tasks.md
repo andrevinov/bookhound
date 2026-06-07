@@ -2,14 +2,14 @@
 
 ## Summary
 
-I would split Bookhound v1 into 22 incremental tasks. Each task should deliver
+I would split Bookhound v1 into 25 incremental tasks. Each task should deliver
 a small piece that can support the next layer and be tested with isolated unit
 tests.
 
 The order below avoids starting with external integrations. First we create the
 internal contract, persistence, deduplication, and a pipeline with fake sources.
-Then we add real sources, license classification, downloads, daemon operation,
-and export.
+Then we add real sources, license classification, public-index discovery,
+targeted crawling strategies, downloads, daemon operation, and export.
 
 ## Roadmap principles
 
@@ -20,6 +20,8 @@ and export.
 - `download` must never bypass the license decision.
 - The daemon must be non-interactive and conservative.
 - Source adapters must be pluggable and independent.
+- Commercial search APIs are optional accelerators, not the foundation for broad
+  web discovery.
 
 ## Tasks
 
@@ -74,7 +76,8 @@ Unit tests:
 - Defaults load without a config file.
 - Environment variables override defaults.
 - Relative paths are resolved predictably.
-- Missing credentials disable paid adapters without breaking the application.
+- Missing credentials disable optional API-backed adapters without breaking the
+  application.
 
 ### 4. SQLite schema and initial migrations
 
@@ -327,20 +330,21 @@ Unit tests:
 - Null license becomes `unknown`.
 - Required email in configuration is validated.
 
-### 18. Web search adapter
+### 18. Google web search adapter
 
-Goal: connect external search engines by API when credentials are available.
+Goal: connect Google Programmable Search when credentials and quota are
+available.
 
 Deliverables:
 
-- Interface for Google Programmable Search or another configured provider.
+- Adapter for Google Programmable Search.
 - Query variants from the planner.
 - Conversion of snippets/results into candidates.
 - Graceful disabling without an API key.
 
 Unit tests:
 
-- Provider JSON fixture becomes candidates.
+- Google JSON fixture becomes candidates.
 - Missing credential marks adapter as disabled.
 - Sent query preserves the planned variant.
 - Quota error becomes a typed error and does not take down the pipeline.
@@ -363,7 +367,64 @@ Unit tests:
 - Crawls are queried in configured order.
 - Malformed line is ignored with an error event.
 
-### 20. Downloader with license gate
+### 20. Seed-based crawler adapter
+
+Goal: discover PDFs from configured seed URLs and trusted domains without using
+commercial search APIs.
+
+Deliverables:
+
+- Configurable seed list with per-seed limits.
+- Same-domain crawling with depth, page-count, and URL-pattern caps.
+- Extraction of PDF links and candidate landing pages.
+- Respect for robots policy, timeouts, and per-domain rate limits.
+
+Unit tests:
+
+- Seed HTML fixture yields direct PDF and landing-page candidates.
+- Off-domain links are ignored unless explicitly allowed.
+- Depth and page-count limits stop expansion.
+- Robots-disallowed URLs are skipped and recorded as skipped events.
+
+### 21. Sitemap mining adapter
+
+Goal: discover candidate URLs from `robots.txt`, `sitemap.xml`, and sitemap
+indexes.
+
+Deliverables:
+
+- Sitemap discovery from a domain root.
+- Parsing for sitemap indexes and URL sets.
+- Filtering for PDF URLs and likely document landing pages.
+- Timestamp and source metadata from sitemap entries when available.
+
+Unit tests:
+
+- `robots.txt` fixture points to sitemap URLs.
+- Sitemap index fixture expands to child sitemaps.
+- URL set fixture yields PDF candidates.
+- Malformed sitemap entries are ignored with an error event.
+
+### 22. Link-graph expansion
+
+Goal: expand discovery from already relevant PDFs or landing pages while
+keeping the crawl frontier bounded.
+
+Deliverables:
+
+- Frontier builder from existing candidates.
+- Same-domain or allowlisted expansion policy.
+- Link scoring based on proximity, URL shape, and anchor text.
+- Loop prevention and duplicate URL suppression.
+
+Unit tests:
+
+- Relevant landing page produces nearby PDF candidates.
+- Already-seen URLs are not requeued.
+- Expansion stays within configured domain policy.
+- Frontier stops at configured depth and candidate limits.
+
+### 23. Downloader with license gate
 
 Goal: download PDFs only when allowed.
 
@@ -383,7 +444,7 @@ Unit tests:
 - Non-interactive `unknown` does not download.
 - Interrupted download is not recorded as success.
 
-### 21. `download` CLI
+### 24. `download` CLI
 
 Goal: expose license-controlled downloads through the CLI.
 
@@ -401,7 +462,7 @@ Unit tests:
 - `unknown` prompt respects the user response.
 - Final summary shows correct counts.
 
-### 22. Jobs, daemon, and export
+### 25. Jobs, daemon, and export
 
 Goal: support continuous home-server operation and data output.
 
@@ -441,16 +502,17 @@ Tasks 14 and 15.
 
 Result: tested v1 license policy with recordable evidence.
 
-### Milestone 4: real sources
+### Milestone 4: real sources and broad discovery
 
-Tasks 16 to 19.
+Tasks 16 to 22.
 
-Result: discovery through arXiv, Unpaywall, configurable web search, and Common
-Crawl, always tested with fixtures.
+Result: discovery through arXiv, Unpaywall, optional Google web search, Common
+Crawl, seed-based crawling, sitemap mining, and link-graph expansion, always
+tested with fixtures.
 
 ### Milestone 5: download and operation
 
-Tasks 20 to 22.
+Tasks 23 to 25.
 
 Result: license-safe downloads, complete v1 CLI, local daemon, and export.
 
