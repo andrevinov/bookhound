@@ -36,6 +36,11 @@ The CLI must clearly separate discovery, persistence, and downloads.
 Core rule: listing and persisting metadata and URLs is always allowed; file
 downloads depend on license classification.
 
+Discovery is intentionally broad: Bookhound may list and store every candidate
+it finds, regardless of license uncertainty, missing safety signals, unknown
+source quality, or incomplete metadata. Those records are catalog entries, not
+download approvals.
+
 ## Pipeline
 
 The main flow should be:
@@ -238,15 +243,21 @@ Classifications:
 - `denied`: evidence indicates restricted access, a paywall, a clear
   prohibition, or an incompatible license.
 - `unknown`: there is not enough evidence.
+- `manually_authorized`: the user has recorded explicit authorization from the
+  rights holder, repository owner, or another responsible party.
 
 Behavior:
 
-- `search`: may list any candidate.
-- `collect`: may save any URL/metadata to the database.
-- interactive `download`: downloads `allowed`, blocks `denied`, and asks the
-  user for `unknown`.
-- `daemon`: downloads `allowed`, blocks `denied`, and leaves `unknown` pending
-  for manual review.
+- `search`: may list any candidate, regardless of license status.
+- `collect`: may save any URL/metadata to the database, regardless of license
+  status.
+- interactive `download`: downloads `allowed` and `manually_authorized`, blocks
+  `denied` by default, and asks the user for `unknown`.
+- `daemon`: downloads `allowed` and `manually_authorized`, blocks `denied`, and
+  leaves `unknown` pending for manual review.
+- A document that was previously `unknown` or `denied` may become
+  `manually_authorized` only after the user records explicit authorization and
+  its evidence in the application.
 
 Possible evidence:
 
@@ -255,10 +266,15 @@ Possible evidence:
 - license fields in HTML, schema.org, Dublin Core, Highwire, or meta tags;
 - text close to the PDF link on the landing page;
 - domain/repository known to be open access;
+- user-recorded explicit authorization, including who granted it, when it was
+  granted, what URL/domain/document it covers, and optional notes or reference;
 - internal PDF metadata, only after an approved download.
 
 Bookhound must record the evidence used for each decision. It must not present
-the classification as definitive legal advice.
+the classification as definitive legal advice. Manual authorization overrides
+license uncertainty only for the scope recorded by the user; it does not bypass
+technical safeguards such as not executing downloaded files and not bypassing
+paywalls, logins, captchas, robots policies, or access blocks.
 
 ## Conceptual data model
 

@@ -268,6 +268,7 @@ Goal: implement the first conservative license policy.
 Deliverables:
 
 - Rules for `allowed`, `denied`, and `unknown`.
+- Rule for `manually_authorized` based on explicit user-recorded permission.
 - Configurable list of known permissive licenses.
 - Configurable list of trusted domains/repositories.
 - Evidence and reason recording.
@@ -277,6 +278,7 @@ Unit tests:
 - Permissive Creative Commons license becomes `allowed`.
 - Paywall or restricted access becomes `denied`.
 - Missing evidence becomes `unknown`.
+- User-recorded explicit permission becomes `manually_authorized`.
 - Decision contains reason and evidence.
 
 ### 15. HTML evidence extraction
@@ -433,6 +435,8 @@ Goal: download PDFs only when allowed.
 Deliverables:
 
 - Download service with mandatory `LicenseDecision` check.
+- Support for `manually_authorized` decisions with recorded authorization
+  evidence.
 - Atomic write to a temporary file and final rename.
 - Hash and size calculation.
 - `downloads` record.
@@ -441,6 +445,7 @@ Deliverables:
 Unit tests:
 
 - `allowed` downloads and records the file.
+- `manually_authorized` downloads and records the authorization evidence used.
 - `denied` does not download.
 - Interactive `unknown` calls the prompt.
 - Non-interactive `unknown` does not download.
@@ -455,11 +460,14 @@ Deliverables:
 - `bookhound download "keyword"` command for search/collect/download.
 - Option to download only previously collected documents.
 - Prompt for `unknown` cases.
+- Command or option for recording explicit manual authorization before a later
+  download.
 - Summary of downloaded, blocked, pending, and failed items.
 
 Unit tests:
 
 - Command downloads only allowed candidates.
+- Command downloads manually authorized candidates.
 - Previously-collected-only option does not call external discovery.
 - `unknown` prompt respects the user response.
 - Final summary shows correct counts.

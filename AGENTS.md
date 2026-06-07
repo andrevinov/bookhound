@@ -52,7 +52,9 @@ asking for that revised test to be changed.
 ## Safety rules
 
 - `collect` must never download PDFs.
-- `download` must always pass through the license gate.
+- `download` must always pass through the license gate. User-recorded explicit
+  authorization can satisfy that gate only when the authorization evidence and
+  scope are persisted.
 - `daemon` must be non-interactive and conservative.
 - External source integrations must use fixtures or mocks in unit tests.
 - Do not bypass paywalls, logins, captchas, robots policies, or access blocks.
