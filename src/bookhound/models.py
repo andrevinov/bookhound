@@ -93,6 +93,7 @@ class RawCandidate(BookhoundModel):
     discovery_method: DiscoveryMethod
     query: str
     snippet: str | None = None
+    adapter_score: float | None = Field(default=None, ge=0.0, le=1.0)
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     discovered_at: datetime = Field(default_factory=_utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
