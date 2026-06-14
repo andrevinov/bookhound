@@ -234,7 +234,7 @@ are shown or persisted.
 Deliverables:
 
 - Scoring component for `RawCandidate` results.
-- Combination of source-provided score, source trust, PDF URL shape, title and
+- Combination of adapter-provided score, source trust, PDF URL shape, title and
   snippet keyword match, and metadata completeness.
 - Deterministic tie-breaking across score, source, and URL.
 - Short score explanation persisted in candidate metadata.
@@ -242,7 +242,7 @@ Deliverables:
 
 Unit tests:
 
-- Higher source score improves the final score.
+- Higher adapter score improves the final score.
 - Direct PDF URLs score higher than weak landing-page candidates when other
   signals are equal.
 - Title and snippet keyword matches improve relevance.
