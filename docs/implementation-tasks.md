@@ -2,7 +2,7 @@
 
 ## Summary
 
-I would split Bookhound v1 into 25 incremental tasks. Each task should deliver
+I would split Bookhound v1 into 26 incremental tasks. Each task should deliver
 a small piece that can support the next layer and be tested with isolated unit
 tests.
 
@@ -226,7 +226,32 @@ Unit tests:
 - Duplicate candidates are merged.
 - Result includes source and query variant used.
 
-### 12. `search` CLI
+### 12. Relevance scoring v1
+
+Goal: assign comparable relevance scores across source adapters before results
+are shown or persisted.
+
+Deliverables:
+
+- Scoring component for `RawCandidate` results.
+- Combination of source-provided score, source trust, PDF URL shape, title and
+  snippet keyword match, and metadata completeness.
+- Deterministic tie-breaking across score, source, and URL.
+- Short score explanation persisted in candidate metadata.
+- Conservative defaults that do not overstate uncertain relevance.
+
+Unit tests:
+
+- Higher source score improves the final score.
+- Direct PDF URLs score higher than weak landing-page candidates when other
+  signals are equal.
+- Title and snippet keyword matches improve relevance.
+- Candidates with DOI, ISBN, or year metadata receive a small completeness
+  boost.
+- Score explanations include the signals that affected the score.
+- Sorting is deterministic when scores are tied.
+
+### 13. `search` CLI
 
 Goal: make discovery visible in the terminal without mandatory persistence.
 
@@ -244,7 +269,7 @@ Unit tests:
 - `--json` returns parseable JSON.
 - Result limit is respected.
 
-### 13. `collect` CLI
+### 14. `collect` CLI
 
 Goal: save results to the database without downloading files.
 
@@ -261,7 +286,7 @@ Unit tests:
 - Running twice does not duplicate equivalent documents.
 - Collection events are recorded.
 
-### 14. License classifier v1
+### 15. License classifier v1
 
 Goal: implement the first conservative license policy.
 
@@ -281,7 +306,7 @@ Unit tests:
 - User-recorded explicit permission becomes `manually_authorized`.
 - Decision contains reason and evidence.
 
-### 15. HTML evidence extraction
+### 16. HTML evidence extraction
 
 Goal: collect license signals from landing pages.
 
@@ -298,7 +323,7 @@ Unit tests:
 - HTML without metadata does not crash and returns an empty list.
 - DOI in a meta tag is extracted.
 
-### 16. arXiv adapter
+### 17. arXiv adapter
 
 Goal: add the first real source with predictable metadata.
 
@@ -316,7 +341,7 @@ Unit tests:
 - Pagination uses `start` and `max_results`.
 - HTTP error becomes a typed source error.
 
-### 17. Unpaywall enrichment adapter
+### 18. Unpaywall enrichment adapter
 
 Goal: enrich DOI-backed documents with OA status, PDF URL, and license.
 
@@ -334,7 +359,7 @@ Unit tests:
 - Null license becomes `unknown`.
 - Required email in configuration is validated.
 
-### 18. Google web search adapter
+### 19. Google web search adapter
 
 Goal: connect Google Programmable Search when credentials and quota are
 available.
@@ -353,7 +378,7 @@ Unit tests:
 - Sent query preserves the planned variant.
 - Quota error becomes a typed error and does not take down the pipeline.
 
-### 19. Common Crawl adapter
+### 20. Common Crawl adapter
 
 Goal: add broad discovery through a public index.
 
@@ -371,7 +396,7 @@ Unit tests:
 - Crawls are queried in configured order.
 - Malformed line is ignored with an error event.
 
-### 20. Seed-based crawler adapter
+### 21. Seed-based crawler adapter
 
 Goal: discover PDFs from configured seed URLs and trusted domains without using
 commercial search APIs.
@@ -390,7 +415,7 @@ Unit tests:
 - Depth and page-count limits stop expansion.
 - Robots-disallowed URLs are skipped and recorded as skipped events.
 
-### 21. Sitemap mining adapter
+### 22. Sitemap mining adapter
 
 Goal: discover candidate URLs from `robots.txt`, `sitemap.xml`, and sitemap
 indexes.
@@ -409,7 +434,7 @@ Unit tests:
 - URL set fixture yields PDF candidates.
 - Malformed sitemap entries are ignored with an error event.
 
-### 22. Link-graph expansion
+### 23. Link-graph expansion
 
 Goal: expand discovery from already relevant PDFs or landing pages while
 keeping the crawl frontier bounded.
@@ -428,7 +453,7 @@ Unit tests:
 - Expansion stays within configured domain policy.
 - Frontier stops at configured depth and candidate limits.
 
-### 23. Downloader with license gate
+### 24. Downloader with license gate
 
 Goal: download PDFs only when allowed.
 
@@ -451,7 +476,7 @@ Unit tests:
 - Non-interactive `unknown` does not download.
 - Interrupted download is not recorded as success.
 
-### 24. `download` CLI
+### 25. `download` CLI
 
 Goal: expose license-controlled downloads through the CLI.
 
@@ -472,7 +497,7 @@ Unit tests:
 - `unknown` prompt respects the user response.
 - Final summary shows correct counts.
 
-### 25. Jobs, daemon, and export
+### 26. Jobs, daemon, and export
 
 Goal: support continuous home-server operation and data output.
 
@@ -501,20 +526,20 @@ normalization, and deduplication working without network access.
 
 ### Milestone 2: discovery and collection without network
 
-Tasks 8 to 13.
+Tasks 8 to 14.
 
 Result: `search` and `collect` CLIs working with a fake source, persistence,
 and pipeline tests.
 
 ### Milestone 3: license and evidence
 
-Tasks 14 and 15.
+Tasks 15 and 16.
 
 Result: tested v1 license policy with recordable evidence.
 
 ### Milestone 4: real sources and broad discovery
 
-Tasks 16 to 22.
+Tasks 17 to 23.
 
 Result: discovery through arXiv, Unpaywall, optional Google web search, Common
 Crawl, seed-based crawling, sitemap mining, and link-graph expansion, always
@@ -522,7 +547,7 @@ tested with fixtures.
 
 ### Milestone 5: download and operation
 
-Tasks 23 to 25.
+Tasks 24 to 26.
 
 Result: license-safe downloads, complete v1 CLI, local daemon, and export.
 
