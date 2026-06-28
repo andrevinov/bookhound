@@ -1,0 +1,51 @@
+# Example Bookhound configuration.
+#
+# Copy this file to a local path such as `.local/bookhound.toml`, then adjust the
+# paths, seed URLs, and optional credentials for your own machine.
+
+[paths]
+database_path = "bookhound.sqlite3"
+pdf_directory = "pdfs"
+
+[http]
+user_agent = "Bookhound/0.1.0 (+https://example.org/contact)"
+request_timeout_seconds = 30
+
+[rate_limits]
+global_rate_limit_per_second = 5
+per_domain_rate_limit_per_second = 1
+
+[sources.google]
+# Google Custom Search is optional and stays disabled unless both credentials
+# are supplied through environment variables or this config file.
+# api_key = "replace-with-google-api-key"
+# search_engine_id = "replace-with-google-search-engine-id"
+
+[sources.unpaywall]
+# Unpaywall is optional and stays disabled unless an email address is supplied.
+# email = "researcher@example.org"
+
+[sources.common_crawl]
+enabled = true
+result_limit = 1000
+# Add one or more Common Crawl CDX indexes when you are ready to query them.
+# Example shape: ["CC-MAIN-YYYY-NN"]
+crawl_indexes = []
+
+[sources.seed_crawler]
+enabled = true
+# Add trusted public pages that Bookhound may crawl for PDF links.
+seed_urls = []
+allowed_domains = []
+same_domain_only = true
+max_depth = 1
+max_pages_per_seed = 50
+
+[sources.sitemap]
+enabled = true
+
+[sources.link_expansion]
+enabled = true
+max_depth = 1
+max_candidates = 100
+same_domain_only = true
