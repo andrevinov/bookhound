@@ -8,12 +8,19 @@ from bookhound import __version__
 from bookhound.config import load_settings
 from bookhound.database import initialize_database
 from bookhound.discovery_pipeline import DiscoveryPipeline, DiscoveryPipelineResult
+from bookhound.downloader import DownloadService, DownloadServiceConfig, DownloadPrompt
+from bookhound.license_classifier import LicenseClassifier
 from bookhound.models import (
     Document,
     DocumentUrl,
+    DownloadRecord,
+    DownloadStatus,
     ExecutionMode,
+    LicenseDecision,
+    LicenseStatus,
     RawCandidate,
     SearchQuery,
+    SourceKind,
     UrlType,
 )
 from bookhound.repositories import RepositorySet
@@ -111,8 +118,61 @@ def collect(
     )
 
 
+@app.command()
+def download(
+    keyword: Annotated[str, typer.Argument(help="Keyword to download PDFs for.")],
+    collected_only: Annotated[
+        bool,
+        typer.Option(
+            "--collected-only",
+            help="Download only documents already collected in the database.",
+        ),
+    ] = False,
+) -> None:
+    settings = load_settings()
+    repositories = RepositorySet(initialize_database(settings.database_path))
+    prompt = TyperDownloadPrompt()
+
+    try:
+        candidates = _download_candidates(keyword, collected_only, repositories)
+        classifier = build_license_classifier()
+        service = build_download_service(repositories, settings, prompt)
+        summary = _download_candidates_with_license_gate(
+            candidates,
+            classifier=classifier,
+            service=service,
+            prompt=prompt,
+        )
+    finally:
+        repositories.close()
+
+    typer.echo(
+        "Download summary: "
+        f"downloaded: {summary.downloaded}, "
+        f"blocked: {summary.blocked}, "
+        f"pending: {summary.pending}, "
+        f"failed: {summary.failed}"
+    )
+
+
 def build_search_pipeline() -> DiscoveryPipeline:
     return DiscoveryPipeline(sources=[])
+
+
+def build_license_classifier() -> LicenseClassifier:
+    return LicenseClassifier()
+
+
+def build_download_service(
+    repositories: RepositorySet,
+    settings,
+    prompt: DownloadPrompt,
+) -> DownloadService:
+    return DownloadService(
+        repositories=repositories,
+        config=DownloadServiceConfig(download_directory=settings.pdf_directory),
+        prompt=prompt,
+    )
 
 
 def _candidate_output(candidate: RawCandidate) -> dict[str, object]:
@@ -156,6 +216,22 @@ class CollectSummary:
     new: int
     updated: int
     duplicate: int
+
+
+@dataclass(frozen=True)
+class DownloadSummary:
+    downloaded: int = 0
+    blocked: int = 0
+    pending: int = 0
+    failed: int = 0
+
+
+class TyperDownloadPrompt:
+    def confirm_unknown_license(self, decision: LicenseDecision) -> bool:
+        return typer.confirm(
+            f"License is unknown ({decision.reason}). Download anyway?",
+            default=False,
+        )
 
 
 def _save_collect_result(
@@ -209,6 +285,126 @@ def _save_collect_result(
 
     repositories.connection.commit()
     return summary
+
+
+def _download_candidates(
+    keyword: str,
+    collected_only: bool,
+    repositories: RepositorySet,
+) -> list[RawCandidate]:
+    if collected_only:
+        return _collected_candidates(repositories)
+
+    pipeline = build_search_pipeline()
+    return pipeline.search(keyword).candidates
+
+
+def _download_candidates_with_license_gate(
+    candidates: list[RawCandidate],
+    *,
+    classifier,
+    service,
+    prompt: TyperDownloadPrompt,
+) -> DownloadSummary:
+    summary = DownloadSummary()
+    for candidate in candidates:
+        decision = classifier.classify(document_url=candidate.url, evidence=[])
+        if decision.status is LicenseStatus.DENIED:
+            summary = _increment_download_summary(summary, blocked=1)
+            continue
+        if decision.status is LicenseStatus.UNKNOWN:
+            if not prompt.confirm_unknown_license(decision):
+                summary = _increment_download_summary(summary, pending=1)
+                continue
+            interactive = True
+        else:
+            interactive = False
+
+        try:
+            record = service.download(
+                document_id=int(candidate.metadata.get("document_id", 0)),
+                document_url_id=int(candidate.metadata.get("document_url_id", 0)),
+                url=candidate.url,
+                license_decision=decision,
+                interactive=interactive,
+            )
+        except Exception:
+            summary = _increment_download_summary(summary, failed=1)
+            continue
+
+        summary = _summary_for_download_record(summary, record)
+
+    return summary
+
+
+def _collected_candidates(repositories: RepositorySet) -> list[RawCandidate]:
+    rows = repositories.connection.execute(
+        """
+        SELECT
+            documents.id,
+            document_urls.id,
+            documents.title,
+            document_urls.url,
+            document_urls.discovery_method,
+            document_urls.confidence
+        FROM document_urls
+        JOIN documents ON documents.id = document_urls.document_id
+        ORDER BY document_urls.discovered_at, document_urls.id
+        """
+    ).fetchall()
+    return [
+        RawCandidate(
+            title=str(row[2]),
+            url=str(row[3]),
+            source=SourceKind.SITEMAP,
+            discovery_method=_discovery_method_or_default(str(row[4])),
+            query="collected",
+            score=row[5],
+            metadata={
+                "document_id": int(row[0]),
+                "document_url_id": int(row[1]),
+            },
+        )
+        for row in rows
+    ]
+
+
+def _summary_for_download_record(
+    summary: DownloadSummary,
+    record: DownloadRecord,
+) -> DownloadSummary:
+    if record.status is DownloadStatus.DOWNLOADED:
+        return _increment_download_summary(summary, downloaded=1)
+    if record.status is DownloadStatus.BLOCKED:
+        return _increment_download_summary(summary, blocked=1)
+    if record.status is DownloadStatus.FAILED:
+        return _increment_download_summary(summary, failed=1)
+    return _increment_download_summary(summary, pending=1)
+
+
+def _increment_download_summary(
+    summary: DownloadSummary,
+    *,
+    downloaded: int = 0,
+    blocked: int = 0,
+    pending: int = 0,
+    failed: int = 0,
+) -> DownloadSummary:
+    return DownloadSummary(
+        downloaded=summary.downloaded + downloaded,
+        blocked=summary.blocked + blocked,
+        pending=summary.pending + pending,
+        failed=summary.failed + failed,
+    )
+
+
+def _discovery_method_or_default(value: str):
+    from bookhound.models import DiscoveryMethod
+
+    try:
+        return DiscoveryMethod(value)
+    except ValueError:
+        return DiscoveryMethod.SITEMAP
 
 
 def _save_candidate(
