@@ -2,14 +2,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 import json
+from urllib.parse import urlsplit, urlunsplit
 
 import typer
 
 from bookhound import __version__
-from bookhound.config import load_settings
+from bookhound.arxiv import ArxivAdapter, ArxivAdapterConfig
+from bookhound.common_crawl import CommonCrawlAdapter, CommonCrawlAdapterConfig
+from bookhound.config import AppSettings, load_settings
 from bookhound.database import initialize_database
 from bookhound.discovery_pipeline import DiscoveryPipeline, DiscoveryPipelineResult
 from bookhound.downloader import DownloadService, DownloadServiceConfig, DownloadPrompt
+from bookhound.google_search import GoogleSearchAdapter, GoogleSearchAdapterConfig
 from bookhound.http_client import BookhoundHttpClient, HttpClientConfig
 from bookhound.license_classifier import LicenseClassifier
 from bookhound.models import (
@@ -26,6 +30,9 @@ from bookhound.models import (
     UrlType,
 )
 from bookhound.repositories import RepositorySet
+from bookhound.seed_crawler import SeedCrawlerAdapter, SeedCrawlerConfig
+from bookhound.sitemap import SitemapAdapter, SitemapAdapterConfig
+from bookhound.sources import SourceAdapter
 from bookhound.url_normalization import canonicalize_url, is_direct_pdf_url
 
 
@@ -171,8 +178,10 @@ def download(
     )
 
 
-def build_search_pipeline() -> DiscoveryPipeline:
-    return DiscoveryPipeline(sources=[])
+def build_search_pipeline(settings: AppSettings | None = None) -> DiscoveryPipeline:
+    settings = settings or load_runtime_settings()
+    http_client = build_http_client(settings)
+    return DiscoveryPipeline(sources=_build_search_sources(settings, http_client))
 
 
 def load_runtime_settings():
@@ -187,6 +196,110 @@ def build_http_client(settings) -> BookhoundHttpClient:
             rate_limit_per_second=settings.per_domain_rate_limit_per_second,
         )
     )
+
+
+def _build_search_sources(
+    settings: AppSettings,
+    http_client: BookhoundHttpClient,
+) -> list[SourceAdapter]:
+    sources: list[SourceAdapter] = [
+        ArxivAdapter(
+            http_client=http_client,
+            config=ArxivAdapterConfig(
+                request_timeout_seconds=settings.request_timeout_seconds,
+                user_agent=settings.user_agent,
+            ),
+        ),
+    ]
+
+    if settings.sources.common_crawl.enabled:
+        sources.append(
+            CommonCrawlAdapter(
+                http_client=http_client,
+                config=CommonCrawlAdapterConfig(
+                    crawl_indexes=settings.sources.common_crawl.crawl_indexes,
+                    result_limit=settings.sources.common_crawl.result_limit,
+                    request_timeout_seconds=settings.request_timeout_seconds,
+                    user_agent=settings.user_agent,
+                ),
+            )
+        )
+
+    if (
+        settings.sources.seed_crawler.enabled
+        and settings.sources.seed_crawler.seed_urls
+    ):
+        sources.append(
+            SeedCrawlerAdapter(
+                http_client=http_client,
+                config=SeedCrawlerConfig(
+                    seed_urls=settings.sources.seed_crawler.seed_urls,
+                    allowed_domains=settings.sources.seed_crawler.allowed_domains,
+                    same_domain_only=settings.sources.seed_crawler.same_domain_only,
+                    max_depth=settings.sources.seed_crawler.max_depth,
+                    max_pages_per_seed=settings.sources.seed_crawler.max_pages_per_seed,
+                    request_timeout_seconds=settings.request_timeout_seconds,
+                    user_agent=settings.user_agent,
+                ),
+            )
+        )
+
+    sitemap_domain_roots = _sitemap_domain_roots(settings)
+    if settings.sources.sitemap.enabled and sitemap_domain_roots:
+        sources.append(
+            SitemapAdapter(
+                http_client=http_client,
+                config=SitemapAdapterConfig(
+                    domain_roots=sitemap_domain_roots,
+                    request_timeout_seconds=settings.request_timeout_seconds,
+                    user_agent=settings.user_agent,
+                ),
+            )
+        )
+
+    if settings.sources.google.enabled:
+        sources.append(
+            GoogleSearchAdapter(
+                http_client=http_client,
+                config=GoogleSearchAdapterConfig(
+                    api_key=_secret_value(settings.sources.google.api_key),
+                    search_engine_id=_secret_value(
+                        settings.sources.google.search_engine_id
+                    ),
+                    request_timeout_seconds=settings.request_timeout_seconds,
+                    user_agent=settings.user_agent,
+                ),
+            )
+        )
+
+    return sources
+
+
+def _sitemap_domain_roots(settings: AppSettings) -> list[str]:
+    return _domain_roots_from_urls(settings.sources.seed_crawler.seed_urls)
+
+
+def _domain_roots_from_urls(urls: list[str]) -> list[str]:
+    roots: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+
+        root = urlunsplit((parsed.scheme, parsed.netloc.lower(), "/", "", ""))
+        if root in seen:
+            continue
+        roots.append(root)
+        seen.add(root)
+
+    return roots
+
+
+def _secret_value(secret) -> str | None:
+    if secret is None:
+        return None
+    return secret.get_secret_value()
 
 
 def build_license_classifier() -> LicenseClassifier:
