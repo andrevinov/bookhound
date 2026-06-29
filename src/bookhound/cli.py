@@ -276,7 +276,12 @@ def _build_search_sources(
 
 
 def _sitemap_domain_roots(settings: AppSettings) -> list[str]:
-    return _domain_roots_from_urls(settings.sources.seed_crawler.seed_urls)
+    return _deduplicate_urls(
+        [
+            *settings.sources.sitemap.domain_roots,
+            *_domain_roots_from_urls(settings.sources.seed_crawler.seed_urls),
+        ]
+    )
 
 
 def _domain_roots_from_urls(urls: list[str]) -> list[str]:
@@ -294,6 +299,17 @@ def _domain_roots_from_urls(urls: list[str]) -> list[str]:
         seen.add(root)
 
     return roots
+
+
+def _deduplicate_urls(urls: list[str]) -> list[str]:
+    deduplicated_urls: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if url in seen:
+            continue
+        deduplicated_urls.append(url)
+        seen.add(url)
+    return deduplicated_urls
 
 
 def _secret_value(secret) -> str | None:

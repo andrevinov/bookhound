@@ -41,6 +41,7 @@ class SeedCrawlerSettings(BaseModel):
 
 class SitemapSettings(BaseModel):
     enabled: bool = True
+    domain_roots: list[str] = Field(default_factory=list)
     request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
     rate_limit_per_second: float = DEFAULT_PER_DOMAIN_RATE_LIMIT_PER_SECOND
 
@@ -276,6 +277,9 @@ def _load_source_settings(
         ),
         sitemap=SitemapSettings(
             enabled=_source_bool(config, "sitemap", "enabled", True),
+            domain_roots=list(
+                _source_setting_value(None, config, "sitemap", "domain_roots", [])
+            ),
             request_timeout_seconds=request_timeout_seconds,
             rate_limit_per_second=per_domain_rate_limit_per_second,
         ),

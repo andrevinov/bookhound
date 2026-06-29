@@ -43,6 +43,8 @@ max_pages_per_seed = 50
 
 [sources.sitemap]
 enabled = true
+# Add public domain roots when you want sitemap discovery without seed crawling.
+domain_roots = []
 
 [sources.link_expansion]
 enabled = true
