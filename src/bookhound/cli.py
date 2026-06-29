@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated
 import json
 
@@ -27,6 +28,9 @@ from bookhound.repositories import RepositorySet
 from bookhound.url_normalization import canonicalize_url, is_direct_pdf_url
 
 
+_runtime_config_path: Path | None = None
+
+
 app = typer.Typer(
     name="bookhound",
     help="Discover, catalog, and selectively download PDFs by keyword.",
@@ -42,6 +46,16 @@ def version_callback(show_version: bool) -> None:
 
 @app.callback()
 def root(
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Path to a Bookhound TOML configuration file.",
+            dir_okay=False,
+            resolve_path=True,
+        ),
+    ] = None,
     version: Annotated[
         bool,
         typer.Option(
@@ -52,7 +66,8 @@ def root(
         ),
     ] = False,
 ) -> None:
-    pass
+    global _runtime_config_path
+    _runtime_config_path = config
 
 
 @app.command()
@@ -101,7 +116,7 @@ def collect(
 ) -> None:
     pipeline = build_search_pipeline()
     result = pipeline.search(keyword)
-    settings = load_settings()
+    settings = load_runtime_settings()
     repositories = RepositorySet(initialize_database(settings.database_path))
 
     try:
@@ -129,7 +144,7 @@ def download(
         ),
     ] = False,
 ) -> None:
-    settings = load_settings()
+    settings = load_runtime_settings()
     repositories = RepositorySet(initialize_database(settings.database_path))
     prompt = TyperDownloadPrompt()
 
@@ -157,6 +172,10 @@ def download(
 
 def build_search_pipeline() -> DiscoveryPipeline:
     return DiscoveryPipeline(sources=[])
+
+
+def load_runtime_settings():
+    return load_settings(config_path=_runtime_config_path)
 
 
 def build_license_classifier() -> LicenseClassifier:
