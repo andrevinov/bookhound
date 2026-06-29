@@ -10,6 +10,7 @@ from bookhound.config import load_settings
 from bookhound.database import initialize_database
 from bookhound.discovery_pipeline import DiscoveryPipeline, DiscoveryPipelineResult
 from bookhound.downloader import DownloadService, DownloadServiceConfig, DownloadPrompt
+from bookhound.http_client import BookhoundHttpClient, HttpClientConfig
 from bookhound.license_classifier import LicenseClassifier
 from bookhound.models import (
     Document,
@@ -176,6 +177,16 @@ def build_search_pipeline() -> DiscoveryPipeline:
 
 def load_runtime_settings():
     return load_settings(config_path=_runtime_config_path)
+
+
+def build_http_client(settings) -> BookhoundHttpClient:
+    return BookhoundHttpClient(
+        HttpClientConfig(
+            user_agent=settings.user_agent,
+            timeout_seconds=settings.request_timeout_seconds,
+            rate_limit_per_second=settings.per_domain_rate_limit_per_second,
+        )
+    )
 
 
 def build_license_classifier() -> LicenseClassifier:
