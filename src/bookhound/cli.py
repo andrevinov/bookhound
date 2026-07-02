@@ -202,15 +202,20 @@ def _build_search_sources(
     settings: AppSettings,
     http_client: BookhoundHttpClient,
 ) -> list[SourceAdapter]:
-    sources: list[SourceAdapter] = [
-        ArxivAdapter(
-            http_client=http_client,
-            config=ArxivAdapterConfig(
-                request_timeout_seconds=settings.request_timeout_seconds,
-                user_agent=settings.user_agent,
-            ),
-        ),
-    ]
+    sources: list[SourceAdapter] = []
+
+    if settings.sources.arxiv.enabled:
+        sources.append(
+            ArxivAdapter(
+                http_client=http_client,
+                config=ArxivAdapterConfig(
+                    max_results=settings.sources.arxiv.max_results,
+                    page_size=settings.sources.arxiv.page_size,
+                    request_timeout_seconds=settings.request_timeout_seconds,
+                    user_agent=settings.user_agent,
+                ),
+            )
+        )
 
     if settings.sources.common_crawl.enabled:
         sources.append(

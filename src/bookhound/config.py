@@ -24,6 +24,12 @@ class UnpaywallSourceSettings(BaseModel):
     email: str | None = None
 
 
+class ArxivSourceSettings(BaseModel):
+    enabled: bool = True
+    max_results: int = 20
+    page_size: int = 10
+
+
 class CommonCrawlSettings(BaseModel):
     enabled: bool = True
     result_limit: int = 1000
@@ -56,6 +62,7 @@ class LinkExpansionSettings(BaseModel):
 class SourceSettings(BaseModel):
     google: GoogleSourceSettings = Field(default_factory=GoogleSourceSettings)
     unpaywall: UnpaywallSourceSettings = Field(default_factory=UnpaywallSourceSettings)
+    arxiv: ArxivSourceSettings = Field(default_factory=ArxivSourceSettings)
     common_crawl: CommonCrawlSettings = Field(default_factory=CommonCrawlSettings)
     seed_crawler: SeedCrawlerSettings = Field(default_factory=SeedCrawlerSettings)
     sitemap: SitemapSettings
@@ -85,6 +92,7 @@ class AppSettings(BaseModel):
                     "enabled": self.sources.unpaywall.enabled,
                     "email": self.sources.unpaywall.email,
                 },
+                "arxiv": self.sources.arxiv.model_dump(mode="json"),
                 "common_crawl": self.sources.common_crawl.model_dump(mode="json"),
                 "seed_crawler": self.sources.seed_crawler.model_dump(mode="json"),
                 "sitemap": self.sources.sitemap.model_dump(mode="json"),
@@ -227,6 +235,27 @@ def _load_source_settings(
         unpaywall=UnpaywallSourceSettings(
             enabled=bool(unpaywall_email),
             email=unpaywall_email,
+        ),
+        arxiv=ArxivSourceSettings(
+            enabled=_source_bool(config, "arxiv", "enabled", True),
+            max_results=int(
+                _source_setting_value(
+                    None,
+                    config,
+                    "arxiv",
+                    "max_results",
+                    20,
+                )
+            ),
+            page_size=int(
+                _source_setting_value(
+                    None,
+                    config,
+                    "arxiv",
+                    "page_size",
+                    10,
+                )
+            ),
         ),
         common_crawl=CommonCrawlSettings(
             enabled=_source_bool(config, "common_crawl", "enabled", True),

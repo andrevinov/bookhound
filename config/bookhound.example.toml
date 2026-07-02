@@ -25,6 +25,11 @@ per_domain_rate_limit_per_second = 1
 # Unpaywall is optional and stays disabled unless an email address is supplied.
 # email = "researcher@example.org"
 
+[sources.arxiv]
+enabled = true
+max_results = 20
+page_size = 10
+
 [sources.common_crawl]
 enabled = true
 result_limit = 1000
