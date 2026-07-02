@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Protocol
 
 from bookhound.models import RawCandidate
 from bookhound.query_planner import PlannedQueryVariant, QueryPlan, QueryPlanner
@@ -13,13 +14,25 @@ class DiscoveryPipelineResult:
     errors: list[str]
 
 
+class LinkExpander(Protocol):
+    def expand(
+        self,
+        existing_candidates: list[RawCandidate],
+        *,
+        query: str,
+    ) -> list[RawCandidate]:
+        raise NotImplementedError
+
+
 class DiscoveryPipeline:
     def __init__(
         self,
         sources: list[SourceAdapter],
+        link_expander: LinkExpander | None = None,
         query_planner: QueryPlanner | None = None,
     ) -> None:
         self.sources = sources
+        self.link_expander = link_expander
         self.query_planner = query_planner or QueryPlanner()
 
     def search(self, keyword: str) -> DiscoveryPipelineResult:
@@ -35,16 +48,21 @@ class DiscoveryPipeline:
                     for error in source_result.errors
                 )
                 for candidate in source_result.candidates:
-                    enriched_candidate = _enrich_candidate(candidate, variant)
-                    canonical_url = enriched_candidate.metadata["canonical_url"]
-                    existing_candidate = candidates_by_canonical_url.get(canonical_url)
-                    if existing_candidate is None:
-                        candidates_by_canonical_url[canonical_url] = enriched_candidate
-                        continue
+                    _add_candidate(
+                        candidates_by_canonical_url,
+                        candidate,
+                        variant,
+                    )
 
-                    candidates_by_canonical_url[canonical_url] = _merge_candidates(
-                        existing_candidate,
-                        enriched_candidate,
+            if self.link_expander is not None:
+                for candidate in self.link_expander.expand(
+                    list(candidates_by_canonical_url.values()),
+                    query=variant.query,
+                ):
+                    _add_candidate(
+                        candidates_by_canonical_url,
+                        candidate,
+                        variant,
                     )
 
         return DiscoveryPipelineResult(
@@ -55,6 +73,24 @@ class DiscoveryPipeline:
             ),
             errors=errors,
         )
+
+
+def _add_candidate(
+    candidates_by_canonical_url: dict[str, RawCandidate],
+    candidate: RawCandidate,
+    variant: PlannedQueryVariant,
+) -> None:
+    enriched_candidate = _enrich_candidate(candidate, variant)
+    canonical_url = enriched_candidate.metadata["canonical_url"]
+    existing_candidate = candidates_by_canonical_url.get(canonical_url)
+    if existing_candidate is None:
+        candidates_by_canonical_url[canonical_url] = enriched_candidate
+        return
+
+    candidates_by_canonical_url[canonical_url] = _merge_candidates(
+        existing_candidate,
+        enriched_candidate,
+    )
 
 
 def _enrich_candidate(

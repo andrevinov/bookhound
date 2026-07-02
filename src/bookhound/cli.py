@@ -16,6 +16,7 @@ from bookhound.downloader import DownloadService, DownloadServiceConfig, Downloa
 from bookhound.google_search import GoogleSearchAdapter, GoogleSearchAdapterConfig
 from bookhound.http_client import BookhoundHttpClient, HttpClientConfig
 from bookhound.license_classifier import LicenseClassifier
+from bookhound.link_expansion import LinkExpansionAdapter, LinkExpansionConfig
 from bookhound.models import (
     Document,
     DocumentUrl,
@@ -181,7 +182,10 @@ def download(
 def build_search_pipeline(settings: AppSettings | None = None) -> DiscoveryPipeline:
     settings = settings or load_runtime_settings()
     http_client = build_http_client(settings)
-    return DiscoveryPipeline(sources=_build_search_sources(settings, http_client))
+    return DiscoveryPipeline(
+        sources=_build_search_sources(settings, http_client),
+        link_expander=_build_link_expander(settings, http_client),
+    )
 
 
 def load_runtime_settings():
@@ -278,6 +282,26 @@ def _build_search_sources(
         )
 
     return sources
+
+
+def _build_link_expander(
+    settings: AppSettings,
+    http_client: BookhoundHttpClient,
+) -> LinkExpansionAdapter | None:
+    if not settings.sources.link_expansion.enabled:
+        return None
+
+    return LinkExpansionAdapter(
+        http_client=http_client,
+        config=LinkExpansionConfig(
+            allowed_domains=settings.sources.seed_crawler.allowed_domains,
+            same_domain_only=settings.sources.link_expansion.same_domain_only,
+            max_depth=settings.sources.link_expansion.max_depth,
+            max_candidates=settings.sources.link_expansion.max_candidates,
+            request_timeout_seconds=settings.request_timeout_seconds,
+            user_agent=settings.user_agent,
+        ),
+    )
 
 
 def _sitemap_domain_roots(settings: AppSettings) -> list[str]:
