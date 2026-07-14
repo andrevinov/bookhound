@@ -1,0 +1,89 @@
+# Local Docker configuration template with the broadest built-in discovery
+# setup that does not require Google credentials.
+#
+# The helper scripts copy this file to `.local/bookhound.toml` on first use.
+# Keep personal credentials, collected databases, exports, and PDFs out of git.
+
+[paths]
+database_path = "/data/bookhound.sqlite3"
+pdf_directory = "/data/pdfs"
+
+[http]
+user_agent = "Bookhound/0.1.0 (+local-docker; contact: local@example.invalid)"
+request_timeout_seconds = 30
+
+[rate_limits]
+global_rate_limit_per_second = 5
+per_domain_rate_limit_per_second = 1
+
+[sources.google]
+# Google Custom Search JSON API is legacy/closed to new customers. Leave this
+# unset unless you already have working credentials.
+# api_key = "replace-with-google-api-key"
+# search_engine_id = "replace-with-google-search-engine-id"
+
+[sources.unpaywall]
+# Optional enrichment source. Set a real email if you want DOI-based Unpaywall
+# lookups in future workflows that use DOI enrichment.
+# email = "researcher@example.org"
+
+[sources.arxiv]
+enabled = true
+max_results = 50
+page_size = 10
+
+[sources.common_crawl]
+enabled = true
+result_limit = 1000
+crawl_indexes = [
+  "CC-MAIN-2026-25",
+  "CC-MAIN-2026-21",
+  "CC-MAIN-2026-17",
+  "CC-MAIN-2026-12",
+  "CC-MAIN-2026-08",
+  "CC-MAIN-2026-04",
+  "CC-MAIN-2025-51",
+  "CC-MAIN-2025-47",
+]
+
+[sources.seed_crawler]
+enabled = true
+seed_urls = [
+  "https://arxiv.org/list/cs.LG/recent",
+  "https://openstax.org/subjects",
+  "https://www.gutenberg.org/ebooks/",
+  "https://archive.org/details/texts",
+  "https://www.doabooks.org/",
+  "https://www.oapen.org/",
+]
+allowed_domains = [
+  "arxiv.org",
+  "openstax.org",
+  "www.gutenberg.org",
+  "gutenberg.org",
+  "archive.org",
+  "www.doabooks.org",
+  "doabooks.org",
+  "www.oapen.org",
+  "oapen.org",
+]
+same_domain_only = true
+max_depth = 1
+max_pages_per_seed = 75
+
+[sources.sitemap]
+enabled = true
+domain_roots = [
+  "https://arxiv.org/",
+  "https://openstax.org/",
+  "https://www.gutenberg.org/",
+  "https://archive.org/",
+  "https://www.doabooks.org/",
+  "https://www.oapen.org/",
+]
+
+[sources.link_expansion]
+enabled = true
+max_depth = 1
+max_candidates = 250
+same_domain_only = true

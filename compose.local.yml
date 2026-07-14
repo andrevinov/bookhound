@@ -1,0 +1,16 @@
+services:
+  bookhound:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.local
+    image: bookhound:local
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/workspace
+      - ./.local/data:/data
+      - ./.local/bookhound.toml:/config/bookhound.toml:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command: bash

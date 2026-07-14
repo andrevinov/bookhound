@@ -1,0 +1,20 @@
+FROM python:3.12-slim
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    POETRY_VERSION=1.8.5 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /workspace
+
+RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
+
+COPY pyproject.toml poetry.lock ./
+COPY src ./src
+COPY config ./config
+COPY scripts ./scripts
+
+RUN poetry config virtualenvs.create false \
+    && poetry install --with dev --no-interaction --no-ansi
+
+CMD ["bookhound", "--help"]
