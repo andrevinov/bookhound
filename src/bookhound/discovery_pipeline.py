@@ -1,8 +1,11 @@
 from dataclasses import dataclass, field
+import json
 import logging
 import time
 from typing import Iterator, Protocol
+import xml.etree.ElementTree as ET
 
+from bookhound.http_client import HttpClientError
 from bookhound.models import DiscoveryMethod, RawCandidate, SourceKind
 from bookhound.query_planner import PlannedQueryVariant, QueryPlan, QueryPlanner
 from bookhound.sources import SourceAdapter, run_source_search
@@ -67,26 +70,18 @@ class DiscoveryPipeline:
                 yield step
 
             if self.link_expander is not None:
-                expanded_candidates = self.link_expander.expand(
+                step = self._link_expansion_step(
+                    query_plan,
+                    variant,
                     list(candidates_by_canonical_url.values()),
-                    query=variant.query,
                 )
-                for candidate in expanded_candidates:
+                for candidate in step.candidates:
                     _add_candidate(
                         candidates_by_canonical_url,
                         candidate,
                         variant,
                     )
-                yield DiscoveryStepResult(
-                    query_plan=query_plan,
-                    variant=variant,
-                    source=SourceKind.LINK_EXPANSION,
-                    discovery_method=DiscoveryMethod.LINK_EXPANSION,
-                    status="completed",
-                    candidates=expanded_candidates,
-                    errors=[],
-                    events=[],
-                )
+                yield step
 
     def search(self, keyword: str) -> DiscoveryPipelineResult:
         started_at = time.perf_counter()
@@ -111,12 +106,17 @@ class DiscoveryPipeline:
                     )
 
             if self.link_expander is not None:
-                expanded_candidates = self.link_expander.expand(
+                step = self._link_expansion_step(
+                    query_plan,
+                    variant,
                     list(candidates_by_canonical_url.values()),
-                    query=variant.query,
                 )
-                raw_candidate_count += len(expanded_candidates)
-                for candidate in expanded_candidates:
+                raw_candidate_count += len(step.candidates)
+                errors.extend(
+                    f"{step.source.value}: {error}" for error in step.errors
+                )
+                events.extend(step.events)
+                for candidate in step.candidates:
                     _add_candidate(
                         candidates_by_canonical_url,
                         candidate,
@@ -192,6 +192,60 @@ class DiscoveryPipeline:
                 errors=source_result.errors,
                 events=source_result.events,
             )
+
+    def _link_expansion_step(
+        self,
+        query_plan: QueryPlan,
+        variant: PlannedQueryVariant,
+        existing_candidates: list[RawCandidate],
+    ) -> DiscoveryStepResult:
+        assert self.link_expander is not None
+
+        try:
+            expanded_candidates = self.link_expander.expand(
+                existing_candidates,
+                query=variant.query,
+            )
+        except (
+            HttpClientError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            ET.ParseError,
+        ) as error:
+            error_message = _external_integration_error_message(error)
+            logger.warning(
+                "Link expansion failed.",
+                extra={
+                    "event": "link_expansion.failed",
+                    "keyword": query_plan.keyword,
+                    "query": variant.query,
+                    "query_variant_label": variant.label,
+                    "source": SourceKind.LINK_EXPANSION.value,
+                    "discovery_method": DiscoveryMethod.LINK_EXPANSION.value,
+                    "error": error_message,
+                },
+            )
+            return DiscoveryStepResult(
+                query_plan=query_plan,
+                variant=variant,
+                source=SourceKind.LINK_EXPANSION,
+                discovery_method=DiscoveryMethod.LINK_EXPANSION,
+                status="failed",
+                candidates=[],
+                errors=[error_message],
+                events=[],
+            )
+
+        return DiscoveryStepResult(
+            query_plan=query_plan,
+            variant=variant,
+            source=SourceKind.LINK_EXPANSION,
+            discovery_method=DiscoveryMethod.LINK_EXPANSION,
+            status="completed",
+            candidates=expanded_candidates,
+            errors=[],
+            events=[],
+        )
 
 
 def _add_candidate(
@@ -274,6 +328,18 @@ def _step_status(candidates: list[RawCandidate], errors: list[str]) -> str:
     if errors and not candidates:
         return "failed"
     return "completed"
+
+
+def _external_integration_error_message(error: Exception) -> str:
+    if isinstance(error, HttpClientError):
+        return f"HTTP client failure: {error}"
+    if isinstance(error, json.JSONDecodeError):
+        return f"Malformed JSON response: {error}"
+    if isinstance(error, UnicodeDecodeError):
+        return f"Invalid text response encoding: {error}"
+    if isinstance(error, ET.ParseError):
+        return f"Malformed XML response: {error}"
+    raise AssertionError(f"Unexpected external integration error: {error!r}")
 
 
 def _duration_ms(started_at: float) -> int:
