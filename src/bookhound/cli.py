@@ -12,7 +12,11 @@ from bookhound import app_factory
 from bookhound.collect_service import CollectService, CollectSummary
 from bookhound.config import AppSettings, load_settings
 from bookhound.database import initialize_database
-from bookhound.discovery_pipeline import DiscoveryPipeline, DiscoveryPipelineResult
+from bookhound.discovery_pipeline import (
+    DiscoveryPipeline,
+    DiscoveryPipelineResult,
+    DiscoveryStepResult,
+)
 from bookhound.download_workflow import (
     DownloadFailure,
     DownloadSummary,
@@ -154,12 +158,15 @@ def collect(
             failure_event="collect.failed",
         )
         _log_command_started("collect.started", context)
-        pipeline = build_search_pipeline()
-        result = pipeline.search(keyword)
         repositories = RepositorySet(initialize_database(settings.database_path))
 
         try:
-            summary = _save_collect_result(repositories, result)
+            pipeline = build_search_pipeline()
+            summary = _save_incremental_collect_result(
+                repositories,
+                pipeline,
+                keyword,
+            )
         finally:
             repositories.close()
         _log_command_completed(
@@ -613,6 +620,92 @@ def _save_collect_result(
     result: DiscoveryPipelineResult,
 ) -> CollectSummary:
     return CollectService(repositories).save_result(result)
+
+
+def _save_incremental_collect_result(
+    repositories: RepositorySet,
+    pipeline: object,
+    keyword: str,
+) -> CollectSummary:
+    summary = CollectSummary(total=0, new=0, updated=0, duplicate=0)
+    query_id: int | None = None
+    query_plan = _pipeline_query_plan(pipeline, keyword)
+    if query_plan is not None:
+        query_id = repositories.begin_collection(query_plan)
+
+    errors: list[str] = []
+    events: list[dict[str, object]] = []
+    seen_canonical_urls: set[str] = set()
+    for step in pipeline.iter_search(keyword):
+        if query_id is None:
+            query_id = repositories.begin_collection(step.query_plan)
+        filtered_step = _filter_seen_collection_candidates(
+            step,
+            seen_canonical_urls,
+        )
+        step_summary = repositories.save_collection_step(query_id, filtered_step)
+        summary = _add_collect_summaries(summary, step_summary)
+        errors.extend(f"{step.source.value}: {error}" for error in step.errors)
+        events.extend(step.events)
+
+    if query_id is not None:
+        repositories.finish_collection(
+            query_id=query_id,
+            keyword=keyword,
+            summary=summary,
+            errors=errors,
+            events=events,
+        )
+
+    return summary
+
+
+def _filter_seen_collection_candidates(
+    step: DiscoveryStepResult,
+    seen_canonical_urls: set[str],
+) -> DiscoveryStepResult:
+    candidates: list[RawCandidate] = []
+    for candidate in step.candidates:
+        canonical_url = _candidate_canonical_url(candidate)
+        if canonical_url in seen_canonical_urls:
+            continue
+        seen_canonical_urls.add(canonical_url)
+        candidates.append(candidate)
+
+    return DiscoveryStepResult(
+        query_plan=step.query_plan,
+        variant=step.variant,
+        source=step.source,
+        discovery_method=step.discovery_method,
+        status=step.status,
+        candidates=candidates,
+        errors=step.errors,
+        events=step.events,
+    )
+
+
+def _pipeline_query_plan(pipeline: object, keyword: str):
+    query_planner = getattr(pipeline, "query_planner", None)
+    if query_planner is None:
+        return None
+
+    plan_queries = getattr(query_planner, "plan_queries", None)
+    if not callable(plan_queries):
+        return None
+
+    return plan_queries(keyword)
+
+
+def _add_collect_summaries(
+    left: CollectSummary,
+    right: CollectSummary,
+) -> CollectSummary:
+    return CollectSummary(
+        total=left.total + right.total,
+        new=left.new + right.new,
+        updated=left.updated + right.updated,
+        duplicate=left.duplicate + right.duplicate,
+    )
 
 
 def _print_download_failures(failures: list[DownloadFailure]) -> None:

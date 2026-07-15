@@ -55,8 +55,38 @@ class DiscoveryPipeline:
 
     def iter_search(self, keyword: str) -> Iterator[DiscoveryStepResult]:
         query_plan = self.query_planner.plan_queries(keyword)
+        candidates_by_canonical_url: dict[str, RawCandidate] = {}
         for variant in query_plan.variants:
-            yield from self._iter_source_steps(query_plan, variant)
+            for step in self._iter_source_steps(query_plan, variant):
+                for candidate in step.candidates:
+                    _add_candidate(
+                        candidates_by_canonical_url,
+                        candidate,
+                        variant,
+                    )
+                yield step
+
+            if self.link_expander is not None:
+                expanded_candidates = self.link_expander.expand(
+                    list(candidates_by_canonical_url.values()),
+                    query=variant.query,
+                )
+                for candidate in expanded_candidates:
+                    _add_candidate(
+                        candidates_by_canonical_url,
+                        candidate,
+                        variant,
+                    )
+                yield DiscoveryStepResult(
+                    query_plan=query_plan,
+                    variant=variant,
+                    source=SourceKind.LINK_EXPANSION,
+                    discovery_method=DiscoveryMethod.LINK_EXPANSION,
+                    status="completed",
+                    candidates=expanded_candidates,
+                    errors=[],
+                    events=[],
+                )
 
     def search(self, keyword: str) -> DiscoveryPipelineResult:
         started_at = time.perf_counter()

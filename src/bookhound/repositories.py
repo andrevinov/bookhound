@@ -91,8 +91,9 @@ class RepositorySet:
         query_id: int,
         step: DiscoveryStepResult,
     ) -> CollectSummary:
+        candidates = _unique_candidates_by_canonical_url(step.candidates)
         summary = CollectSummary(
-            total=len(step.candidates),
+            total=len(candidates),
             new=0,
             updated=0,
             duplicate=0,
@@ -107,7 +108,7 @@ class RepositorySet:
                     variant_query=step.variant.query,
                     source=step.source,
                     discovery_method=step.discovery_method,
-                    candidate_count=len(step.candidates),
+                    candidate_count=len(candidates),
                     errors=list(step.errors),
                     metadata={},
                     commit=False,
@@ -122,7 +123,7 @@ class RepositorySet:
                     metadata={},
                     commit=False,
                 )
-                for candidate in step.candidates:
+                for candidate in candidates:
                     summary = self._save_discovery_candidate(
                         candidate,
                         summary,
@@ -130,7 +131,7 @@ class RepositorySet:
                     )
                 self.collection_steps.mark_completed(
                     step_id,
-                    candidate_count=len(step.candidates),
+                    candidate_count=len(candidates),
                     errors=list(step.errors),
                     metadata={},
                     commit=False,
@@ -153,7 +154,7 @@ class RepositorySet:
                     "source": step.source.value,
                     "discovery_method": step.discovery_method.value,
                     "status": step.status,
-                    "candidate_count": len(step.candidates),
+                    "candidate_count": len(candidates),
                     "error_count": len(step.errors),
                     "error": str(error),
                 },
@@ -161,6 +162,52 @@ class RepositorySet:
             raise
 
         return summary
+
+    def finish_collection(
+        self,
+        *,
+        query_id: int,
+        keyword: str,
+        summary: CollectSummary,
+        errors: list[str],
+        events: list[dict[str, object]],
+    ) -> None:
+        try:
+            self.connection.execute("BEGIN")
+            self.events.add(
+                event_type="collect.completed",
+                entity_type="query",
+                entity_id=query_id,
+                message=(
+                    f"Collected {summary.total} "
+                    f"{_candidate_count_label(summary.total)} "
+                    f"for {keyword}."
+                ),
+                metadata={
+                    "keyword": keyword,
+                    "new": summary.new,
+                    "updated": summary.updated,
+                    "duplicate": summary.duplicate,
+                    "errors": list(errors),
+                },
+                commit=False,
+            )
+            for event in events:
+                self.events.add(
+                    event_type=_event_type(event),
+                    entity_type="query",
+                    entity_id=query_id,
+                    message=_event_message(event),
+                    metadata=_event_metadata(
+                        event,
+                        keyword=keyword,
+                    ),
+                    commit=False,
+                )
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
 
     def save_discovery_result(
         self,
@@ -1282,14 +1329,28 @@ def _candidate_document_metadata(candidate: RawCandidate) -> dict[str, object]:
     }
 
 
-def _candidate_document_url(candidate: RawCandidate) -> DocumentUrl:
-    canonical_url = candidate.metadata.get("canonical_url")
-    if not isinstance(canonical_url, str) or not canonical_url.strip():
-        canonical_url = canonicalize_url(candidate.url)
+def _unique_candidates_by_canonical_url(
+    candidates: Iterable[RawCandidate],
+) -> list[RawCandidate]:
+    candidates_by_canonical_url: dict[str, RawCandidate] = {}
+    for candidate in candidates:
+        canonical_url = _candidate_canonical_url(candidate)
+        if canonical_url not in candidates_by_canonical_url:
+            candidates_by_canonical_url[canonical_url] = candidate
+    return list(candidates_by_canonical_url.values())
 
+
+def _candidate_canonical_url(candidate: RawCandidate) -> str:
+    canonical_url = candidate.metadata.get("canonical_url")
+    if isinstance(canonical_url, str) and canonical_url.strip():
+        return canonical_url
+    return canonicalize_url(candidate.url)
+
+
+def _candidate_document_url(candidate: RawCandidate) -> DocumentUrl:
     return DocumentUrl(
         url=candidate.url,
-        canonical_url=canonical_url,
+        canonical_url=_candidate_canonical_url(candidate),
         source=candidate.source,
         discovery_method=candidate.discovery_method,
         url_type=(
