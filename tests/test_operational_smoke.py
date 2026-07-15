@@ -8,10 +8,15 @@ import pytest
 
 import bookhound.cli as cli
 from bookhound.config import load_settings
-from bookhound.discovery_pipeline import DiscoveryPipeline
+from bookhound.discovery_pipeline import DiscoveryPipeline, DiscoveryStepResult
 from bookhound.link_expansion import LinkExpansionAdapter, LinkExpansionConfig
-from bookhound.models import DiscoveryMethod, SourceKind
-from bookhound.query_planner import QueryPlanner, QueryPlannerConfig
+from bookhound.models import DiscoveryMethod, RawCandidate, SourceKind
+from bookhound.query_planner import (
+    PlannedQueryVariant,
+    QueryPlan,
+    QueryPlanner,
+    QueryPlannerConfig,
+)
 from bookhound.sources import FakeSourceAdapter
 
 
@@ -175,6 +180,101 @@ def test_collect_persists_expanded_links_from_non_utf8_html_without_failure_log(
     ) in document_urls
 
 
+def test_collect_smoke_preserves_partial_results_when_late_source_fails(
+    tmp_path: Path,
+    monkeypatch,
+    sitemap_candidate_factory,
+    count_rows_helper,
+) -> None:
+    database_path = tmp_path / "bookhound.sqlite3"
+    query_plan = _smoke_query_plan("partial progress")
+    persisted_candidate = sitemap_candidate_factory(
+        title="Persisted Before Late Failure",
+        url="https://example.org/reports/persisted-before-failure.pdf",
+        query=query_plan.variants[0].query,
+    )
+    pipeline = IncrementalSmokePipeline(
+        [
+            _smoke_step(
+                query_plan=query_plan,
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                status="completed",
+                candidates=[persisted_candidate],
+            ),
+            _smoke_step(
+                query_plan=query_plan,
+                source=SourceKind.COMMON_CRAWL,
+                discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                status="failed",
+                errors=["availability: Common Crawl index unavailable."],
+            ),
+        ]
+    )
+    monkeypatch.setattr(cli, "build_search_pipeline", lambda: pipeline, raising=False)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["collect", "partial progress"],
+        env={
+            "BOOKHOUND_DATABASE_PATH": str(database_path),
+            "BOOKHOUND_LOG_LEVEL": "INFO",
+            "BOOKHOUND_LOG_FORMAT": "json",
+            "BOOKHOUND_LOG_DESTINATION": "stderr",
+            "BOOKHOUND_LOG_FILE": None,
+        },
+    )
+
+    assert result.exit_code == 0
+    assert "Collected 1 candidate: new: 1, updated: 0, duplicate: 0" in result.stdout
+    logs = [
+        json.loads(line)
+        for line in result.stderr.splitlines()
+        if line.strip()
+    ]
+    failed_step_log = _smoke_event(logs, "collect.step.failed")
+    completed_run_log = _smoke_event(logs, "collect.run.completed")
+
+    assert failed_step_log["source"] == "common_crawl"
+    assert failed_step_log["error_count"] == 1
+    assert completed_run_log["total"] == 1
+    assert completed_run_log["error_count"] == 1
+
+    with sqlite3.connect(database_path) as connection:
+        counts = {
+            table: count_rows_helper(connection, table)
+            for table in ["queries", "collection_steps", "documents", "document_urls"]
+        }
+        steps = connection.execute(
+            """
+            SELECT source, discovery_method, status, candidate_count, error_count
+            FROM collection_steps
+            ORDER BY id
+            """
+        ).fetchall()
+        document_url = connection.execute(
+            """
+            SELECT url, discovery_method
+            FROM document_urls
+            """
+        ).fetchone()
+
+    assert counts == {
+        "queries": 1,
+        "collection_steps": 2,
+        "documents": 1,
+        "document_urls": 1,
+    }
+    assert steps == [
+        ("sitemap", "sitemap", "completed", 1, 0),
+        ("common_crawl", "public_index", "failed", 0, 1),
+    ]
+    assert document_url == (
+        "https://example.org/reports/persisted-before-failure.pdf",
+        "sitemap",
+    )
+
+
 def test_export_smoke_writes_jsonl_after_collect(
     tmp_path: Path,
     monkeypatch,
@@ -242,3 +342,51 @@ def test_export_smoke_writes_jsonl_after_collect(
     assert rows[0]["metadata"]["lastmod"] == "2026-07-04"
     assert rows[0]["metadata"]["sitemap_url"] == "https://example.org/sitemap.xml"
     assert rows[0]["metadata"]["url_type"] == "pdf"
+
+
+class IncrementalSmokePipeline:
+    def __init__(self, steps: list[DiscoveryStepResult]) -> None:
+        self.steps = steps
+
+    def search(self, keyword: str) -> object:
+        raise AssertionError("collect must consume incremental steps")
+
+    def iter_search(self, keyword: str):
+        yield from self.steps
+
+
+def _smoke_query_plan(keyword: str) -> QueryPlan:
+    return QueryPlan(
+        keyword=keyword,
+        variants=[PlannedQueryVariant(label="quoted", query=f'"{keyword}"')],
+    )
+
+
+def _smoke_step(
+    *,
+    query_plan: QueryPlan,
+    source: SourceKind,
+    discovery_method: DiscoveryMethod,
+    status: str,
+    candidates: list[RawCandidate] | None = None,
+    errors: list[str] | None = None,
+) -> DiscoveryStepResult:
+    return DiscoveryStepResult(
+        query_plan=query_plan,
+        variant=query_plan.variants[0],
+        source=source,
+        discovery_method=discovery_method,
+        status=status,
+        candidates=list(candidates or []),
+        errors=list(errors or []),
+        events=[],
+    )
+
+
+def _smoke_event(
+    logs: list[dict[str, object]],
+    event_type: str,
+) -> dict[str, object]:
+    matches = [log for log in logs if log.get("event") == event_type]
+    assert len(matches) == 1, logs
+    return matches[0]
