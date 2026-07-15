@@ -2,18 +2,22 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from urllib.parse import urljoin
+import logging
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from bookhound.html_links import HtmlLink, parse_links
 from bookhound.http_client import BookhoundHttpClient, HttpClientConfig, HttpClientProtocol
 from bookhound.models import DiscoveryMethod, RawCandidate, SourceKind
-from bookhound.sources import SourceAdapter, SourceAvailabilityError
+from bookhound.sources import SourceAdapter
 from bookhound.url_normalization import (
     canonicalize_url_or_raw,
     safe_is_direct_pdf_url,
     title_from_url,
     url_domain,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -76,10 +80,18 @@ class LinkExpansionAdapter(SourceAdapter):
 
             response = self.http_client.get(page_url, rate_limit_key=self.rate_limit_key)
             if not 200 <= response.status_code < 300:
-                raise SourceAvailabilityError(
-                    SourceKind.LINK_EXPANSION,
-                    f"Link expansion returned HTTP {response.status_code}.",
+                visited_pages.add(canonical_page_url)
+                logger.warning(
+                    "Link expansion page skipped.",
+                    extra={
+                        "event": "link_expansion.page_skipped",
+                        "url": _sanitize_url(page_url),
+                        "status_code": response.status_code,
+                        "source_candidate_url": _sanitize_url(source_candidate_url),
+                        "depth": depth,
+                    },
                 )
+                continue
             visited_pages.add(canonical_page_url)
 
             for link in parse_links(response.content.decode("utf-8")):
@@ -159,3 +171,8 @@ def _domain_allowed(
     source_domain = url_domain(source_page_url)
     allowed_domains = {domain.lower() for domain in config.allowed_domains}
     return candidate_domain == source_domain or candidate_domain in allowed_domains
+
+
+def _sanitize_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
