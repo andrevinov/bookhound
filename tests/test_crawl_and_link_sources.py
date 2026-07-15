@@ -593,6 +593,54 @@ def test_seed_html_fixture_yields_direct_pdf_and_landing_page_candidates(
 
 
 @pytest.mark.revised
+def test_seed_crawler_decodes_non_utf8_html_and_extracts_links(
+    recording_http_client_factory,
+    html_response_factory,
+) -> None:
+    html = b"""
+    <html>
+      <body>
+        <p>Legacy text byte: \xf4</p>
+        <a href="/reports/legacy-seed.pdf">Legacy seed PDF</a>
+        <a href="/reports/legacy-seed">Legacy seed landing page</a>
+      </body>
+    </html>
+    """
+    adapter = SeedCrawlerAdapter(
+        http_client=recording_http_client_factory.from_mapping(
+            {
+                "https://example.org/library/": html_response_factory(
+                    url="https://example.org/library/",
+                    content=html,
+                    headers={"content-type": "text/html; charset=windows-1252"},
+                )
+            }
+        ),
+        robots_policy=FakeRobotsPolicy(),
+        config=SeedCrawlerConfig(
+            seed_urls=["https://example.org/library/"],
+            max_depth=0,
+            max_pages_per_seed=1,
+        ),
+    )
+
+    candidates = adapter.search("legacy encoding")
+
+    assert [(candidate.title, candidate.url) for candidate in candidates] == [
+        ("Legacy seed PDF", "https://example.org/reports/legacy-seed.pdf"),
+        (
+            "Legacy seed landing page",
+            "https://example.org/reports/legacy-seed",
+        ),
+    ]
+    assert [candidate.metadata["url_type"] for candidate in candidates] == [
+        "pdf",
+        "landing_page",
+    ]
+    assert all(candidate.query == "legacy encoding" for candidate in candidates)
+
+
+@pytest.mark.revised
 def test_off_domain_links_are_ignored_unless_explicitly_allowed(
     recording_http_client_factory,
     html_response_factory,
