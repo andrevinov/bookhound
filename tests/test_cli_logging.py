@@ -274,6 +274,42 @@ def test_command_failure_is_logged_to_stderr(tmp_path: Path) -> None:
     assert str(missing_config) in failure_log["error"]
 
 
+@pytest.mark.revised
+def test_unexpected_command_failure_logs_error_type_and_traceback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FailingPipeline:
+        def search(self, keyword: str) -> object:
+            assert keyword == "runtime failure"
+            raise RuntimeError("simulated pipeline failure")
+
+    monkeypatch.setattr(
+        cli,
+        "build_search_pipeline",
+        lambda: FailingPipeline(),
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["collect", "runtime failure"],
+        env=_logging_env(tmp_path),
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.stdout
+
+    failure_log = _event(_json_logs(result.stderr), "collect.failed")
+    assert failure_log["level"] == "ERROR"
+    assert failure_log["mode"] == "collect"
+    assert failure_log["keyword"] == "runtime failure"
+    assert failure_log["error"] == "simulated pipeline failure"
+    assert failure_log["error_type"] == "RuntimeError"
+    assert "Traceback (most recent call last)" in failure_log["exception"]
+    assert "RuntimeError: simulated pipeline failure" in failure_log["exception"]
+
+
 def _logging_env(
     tmp_path: Path,
     *,
