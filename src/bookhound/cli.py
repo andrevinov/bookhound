@@ -1,6 +1,9 @@
 from pathlib import Path
 from typing import Annotated
 import json
+import logging
+import time
+import uuid
 
 import typer
 
@@ -21,6 +24,7 @@ from bookhound.export import ExportService
 from bookhound.http_client import BookhoundHttpClient, HttpClientProtocol
 from bookhound.jobs import CrawlJobRepository
 from bookhound.license_classifier import LicenseClassifier
+from bookhound.logging_config import configure_logging
 from bookhound.models import (
     LicenseDecision,
     PersistedDownloadCandidate,
@@ -32,6 +36,7 @@ from bookhound.url_normalization import canonicalize_url
 
 
 _runtime_config_path: Path | None = None
+logger = logging.getLogger(__name__)
 
 
 app = typer.Typer(
@@ -96,9 +101,29 @@ def search(
         ),
     ] = 20,
 ) -> None:
-    pipeline = build_search_pipeline()
-    result = pipeline.search(keyword)
-    candidates = result.candidates[:limit]
+    context = _command_context("search", keyword=keyword)
+    started_at = time.perf_counter()
+    try:
+        load_runtime_settings(
+            failure_context=context,
+            failure_event="search.failed",
+        )
+        _log_command_started("search.started", context)
+        pipeline = build_search_pipeline()
+        result = pipeline.search(keyword)
+        candidates = result.candidates[:limit]
+        _log_command_completed(
+            "search.completed",
+            context,
+            started_at,
+            result_count=len(candidates),
+            total_result_count=len(result.candidates),
+        )
+    except typer.Exit:
+        raise
+    except Exception as error:
+        _log_command_failed("search.failed", context, error, started_at)
+        raise
 
     if json_output:
         typer.echo(
@@ -121,15 +146,36 @@ def search(
 def collect(
     keyword: Annotated[str, typer.Argument(help="Keyword to collect PDFs for.")],
 ) -> None:
-    pipeline = build_search_pipeline()
-    result = pipeline.search(keyword)
-    settings = load_runtime_settings()
-    repositories = RepositorySet(initialize_database(settings.database_path))
-
+    context = _command_context("collect", keyword=keyword)
+    started_at = time.perf_counter()
     try:
-        summary = _save_collect_result(repositories, result)
-    finally:
-        repositories.close()
+        settings = load_runtime_settings(
+            failure_context=context,
+            failure_event="collect.failed",
+        )
+        _log_command_started("collect.started", context)
+        pipeline = build_search_pipeline()
+        result = pipeline.search(keyword)
+        repositories = RepositorySet(initialize_database(settings.database_path))
+
+        try:
+            summary = _save_collect_result(repositories, result)
+        finally:
+            repositories.close()
+        _log_command_completed(
+            "collect.completed",
+            context,
+            started_at,
+            total=summary.total,
+            new=summary.new,
+            updated=summary.updated,
+            duplicate=summary.duplicate,
+        )
+    except typer.Exit:
+        raise
+    except Exception as error:
+        _log_command_failed("collect.failed", context, error, started_at)
+        raise
 
     typer.echo(
         "Collected "
@@ -151,27 +197,48 @@ def download(
         ),
     ] = False,
 ) -> None:
-    settings = load_runtime_settings()
-    repositories = RepositorySet(initialize_database(settings.database_path))
-    prompt = TyperDownloadPrompt()
-
+    context = _command_context("download", keyword=keyword)
+    started_at = time.perf_counter()
     try:
-        candidates, preparation_failed = _download_candidates(
-            keyword,
-            collected_only,
-            repositories,
+        settings = load_runtime_settings(
+            failure_context=context,
+            failure_event="download.failed",
         )
-        classifier = build_license_classifier()
-        service = build_download_service(repositories, settings, prompt)
-        summary = _download_candidates_with_license_gate(
-            candidates,
-            classifier=classifier,
-            service=service,
-            prompt=prompt,
+        _log_command_started("download.started", context)
+        repositories = RepositorySet(initialize_database(settings.database_path))
+        prompt = TyperDownloadPrompt()
+
+        try:
+            candidates, preparation_failed = _download_candidates(
+                keyword,
+                collected_only,
+                repositories,
+            )
+            classifier = build_license_classifier()
+            service = build_download_service(repositories, settings, prompt)
+            summary = _download_candidates_with_license_gate(
+                candidates,
+                classifier=classifier,
+                service=service,
+                prompt=prompt,
+            )
+            summary = _add_preparation_failures(summary, preparation_failed)
+        finally:
+            repositories.close()
+        _log_command_completed(
+            "download.completed",
+            context,
+            started_at,
+            downloaded=summary.downloaded,
+            blocked=summary.blocked,
+            pending=summary.pending,
+            failed=summary.failed,
         )
-        summary = _add_preparation_failures(summary, preparation_failed)
-    finally:
-        repositories.close()
+    except typer.Exit:
+        raise
+    except Exception as error:
+        _log_command_failed("download.failed", context, error, started_at)
+        raise
 
     typer.echo(
         "Download summary: "
@@ -194,28 +261,70 @@ def add_job(
         ),
     ] = 0,
 ) -> None:
-    settings = load_runtime_settings()
-    repositories = RepositorySet(initialize_database(settings.database_path))
+    context = _command_context("job", keyword=keyword)
+    started_at = time.perf_counter()
     try:
-        job_id = CrawlJobRepository(repositories.connection).create(
-            keyword,
+        settings = load_runtime_settings(
+            failure_context=context,
+            failure_event="job.failed",
+        )
+        repositories = RepositorySet(initialize_database(settings.database_path))
+        try:
+            job_id = CrawlJobRepository(repositories.connection).create(
+                keyword,
+                priority=priority,
+            )
+        finally:
+            repositories.close()
+        _log_command_completed(
+            "job.created",
+            context,
+            started_at,
+            job_id=job_id,
             priority=priority,
         )
-    finally:
-        repositories.close()
+    except typer.Exit:
+        raise
+    except Exception as error:
+        _log_command_failed("job.failed", context, error, started_at)
+        raise
 
     typer.echo(f"Created job {job_id} for {keyword}.")
 
 
 @daemon_app.command("run-once")
 def daemon_run_once() -> None:
-    settings = load_runtime_settings()
-    repositories = RepositorySet(initialize_database(settings.database_path))
+    context = _command_context("daemon")
+    started_at = time.perf_counter()
     try:
-        runner = build_daemon_runner(repositories, settings)
-        result = runner.run_once()
-    finally:
-        repositories.close()
+        settings = load_runtime_settings(
+            failure_context=context,
+            failure_event="daemon.run_once.failed",
+        )
+        _log_command_started("daemon.run_once.started", context)
+        repositories = RepositorySet(initialize_database(settings.database_path))
+        try:
+            runner = build_daemon_runner(repositories, settings)
+            result = runner.run_once()
+        finally:
+            repositories.close()
+        _log_command_completed(
+            "daemon.run_once.completed",
+            context,
+            started_at,
+            locked=result.locked,
+            job_id=result.job_id,
+            download_status=(
+                result.download_status.value
+                if result.download_status is not None
+                else None
+            ),
+        )
+    except typer.Exit:
+        raise
+    except Exception as error:
+        _log_command_failed("daemon.run_once.failed", context, error, started_at)
+        raise
 
     if result.locked:
         typer.echo("Daemon run skipped: lock held.")
@@ -246,20 +355,40 @@ def export_command(
         ),
     ] = "jsonl",
 ) -> None:
-    settings = load_runtime_settings()
-    repositories = RepositorySet(initialize_database(settings.database_path))
+    context = _command_context("export")
+    started_at = time.perf_counter()
     try:
-        exporter = ExportService(repositories.connection)
-        row_count = _export_row_count(repositories)
-        normalized_format = export_format.strip().lower()
-        if normalized_format == "jsonl":
-            exporter.export_jsonl(output)
-        elif normalized_format == "csv":
-            exporter.export_csv(output)
-        else:
-            raise typer.BadParameter("Export format must be jsonl or csv.")
-    finally:
-        repositories.close()
+        settings = load_runtime_settings(
+            failure_context=context,
+            failure_event="export.failed",
+        )
+        _log_command_started("export.started", context)
+        repositories = RepositorySet(initialize_database(settings.database_path))
+        try:
+            exporter = ExportService(repositories.connection)
+            row_count = _export_row_count(repositories)
+            normalized_format = export_format.strip().lower()
+            if normalized_format == "jsonl":
+                exporter.export_jsonl(output)
+            elif normalized_format == "csv":
+                exporter.export_csv(output)
+            else:
+                raise typer.BadParameter("Export format must be jsonl or csv.")
+        finally:
+            repositories.close()
+        _log_command_completed(
+            "export.completed",
+            context,
+            started_at,
+            row_count=row_count,
+            output=str(output),
+            format=normalized_format,
+        )
+    except typer.Exit:
+        raise
+    except Exception as error:
+        _log_command_failed("export.failed", context, error, started_at)
+        raise
 
     typer.echo(f"Exported {row_count} {_row_count_label(row_count)} to {output}.")
 
@@ -273,12 +402,98 @@ def build_search_pipeline(settings: AppSettings | None = None) -> DiscoveryPipel
     )
 
 
-def load_runtime_settings():
+def load_runtime_settings(
+    *,
+    failure_context: dict[str, object] | None = None,
+    failure_event: str | None = None,
+):
     try:
-        return load_settings(config_path=_runtime_config_path)
+        settings = load_settings(config_path=_runtime_config_path)
     except FileNotFoundError as error:
+        _configure_fallback_logging()
+        if failure_context is not None and failure_event is not None:
+            _log_command_failed(
+                failure_event,
+                failure_context,
+                error,
+                started_at=None,
+            )
         typer.echo(f"Error: {error}")
         raise typer.Exit(1) from error
+    configure_logging(settings.logging)
+    return settings
+
+
+def _configure_fallback_logging() -> None:
+    try:
+        fallback_settings = load_settings(config_path=None)
+    except Exception:
+        return
+    configure_logging(fallback_settings.logging)
+
+
+def _command_context(
+    mode: str,
+    *,
+    keyword: str | None = None,
+) -> dict[str, object]:
+    context: dict[str, object] = {
+        "mode": mode,
+        "run_id": uuid.uuid4().hex,
+    }
+    if keyword is not None:
+        context["keyword"] = keyword
+    return context
+
+
+def _log_command_started(
+    event: str,
+    context: dict[str, object],
+) -> None:
+    logger.info(
+        "Command started.",
+        extra={
+            **context,
+            "event": event,
+        },
+    )
+
+
+def _log_command_completed(
+    event: str,
+    context: dict[str, object],
+    started_at: float,
+    **metadata: object,
+) -> None:
+    logger.info(
+        "Command completed.",
+        extra={
+            **context,
+            "event": event,
+            "duration_ms": _duration_ms(started_at),
+            **metadata,
+        },
+    )
+
+
+def _log_command_failed(
+    event: str,
+    context: dict[str, object],
+    error: Exception,
+    started_at: float | None,
+) -> None:
+    metadata: dict[str, object] = {
+        **context,
+        "event": event,
+        "error": str(error),
+    }
+    if started_at is not None:
+        metadata["duration_ms"] = _duration_ms(started_at)
+    logger.error("Command failed.", extra=metadata)
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, round((time.perf_counter() - started_at) * 1000))
 
 
 def build_http_client(settings) -> BookhoundHttpClient:
