@@ -58,6 +58,7 @@ class RepositorySet:
         self.license_evidence = LicenseEvidenceRepository(connection)
         self.downloads = DownloadRepository(connection)
         self.events = EventRepository(connection)
+        self.collection_steps = CollectionStepRepository(connection)
 
     def close(self) -> None:
         self.connection.close()
@@ -292,6 +293,166 @@ class QueryRepository:
         )
         _commit_if_requested(self.connection, commit)
         return int(cursor.lastrowid)
+
+
+class CollectionStepRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create_running(
+        self,
+        *,
+        query_id: int,
+        variant_label: str,
+        variant_query: str,
+        source: SourceKind,
+        discovery_method: DiscoveryMethod,
+        metadata: dict[str, Any],
+        commit: bool = True,
+    ) -> int:
+        cursor = self.connection.execute(
+            """
+            INSERT INTO collection_steps (
+                query_id,
+                variant_label,
+                variant_query,
+                source,
+                discovery_method,
+                status,
+                candidate_count,
+                error_count,
+                errors_json,
+                metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                query_id,
+                variant_label,
+                variant_query,
+                source.value,
+                discovery_method.value,
+                "running",
+                0,
+                0,
+                _to_json([]),
+                _to_json(metadata),
+            ),
+        )
+        _commit_if_requested(self.connection, commit)
+        return int(cursor.lastrowid)
+
+    def mark_completed(
+        self,
+        step_id: int,
+        *,
+        candidate_count: int,
+        errors: list[str],
+        metadata: dict[str, Any],
+        commit: bool = True,
+    ) -> None:
+        self._mark_finished(
+            step_id,
+            status="completed",
+            candidate_count=candidate_count,
+            errors=errors,
+            metadata=metadata,
+            commit=commit,
+        )
+
+    def record_failed(
+        self,
+        *,
+        query_id: int,
+        variant_label: str,
+        variant_query: str,
+        source: SourceKind,
+        discovery_method: DiscoveryMethod,
+        candidate_count: int,
+        errors: list[str],
+        metadata: dict[str, Any],
+        commit: bool = True,
+    ) -> int:
+        cursor = self.connection.execute(
+            """
+            INSERT INTO collection_steps (
+                query_id,
+                variant_label,
+                variant_query,
+                source,
+                discovery_method,
+                status,
+                completed_at,
+                candidate_count,
+                error_count,
+                errors_json,
+                metadata_json
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?,
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                ?, ?, ?, ?
+            )
+            """,
+            (
+                query_id,
+                variant_label,
+                variant_query,
+                source.value,
+                discovery_method.value,
+                "failed",
+                candidate_count,
+                len(errors),
+                _to_json(errors),
+                _to_json(metadata),
+            ),
+        )
+        _commit_if_requested(self.connection, commit)
+        return int(cursor.lastrowid)
+
+    def _mark_finished(
+        self,
+        step_id: int,
+        *,
+        status: str,
+        candidate_count: int,
+        errors: list[str],
+        metadata: dict[str, Any],
+        commit: bool,
+    ) -> None:
+        row = self.connection.execute(
+            """
+            SELECT metadata_json
+            FROM collection_steps
+            WHERE id = ?
+            """,
+            (step_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Expected collection step was not found.")
+
+        merged_metadata = _merge_json_object(row[0], metadata)
+        self.connection.execute(
+            """
+            UPDATE collection_steps
+            SET status = ?,
+                completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                candidate_count = ?,
+                error_count = ?,
+                errors_json = ?,
+                metadata_json = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                candidate_count,
+                len(errors),
+                _to_json(errors),
+                _to_json(merged_metadata),
+                step_id,
+            ),
+        )
+        _commit_if_requested(self.connection, commit)
 
 
 class SourceRepository:

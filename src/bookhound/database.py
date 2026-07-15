@@ -4,7 +4,7 @@ import sqlite3
 from bookhound.models import CrawlJobStatus
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def initialize_database(path: str | Path) -> sqlite3.Connection:
@@ -39,11 +39,20 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     if current_version == 0:
         _apply_schema_v1(connection)
         _apply_schema_v2(connection)
+        _apply_schema_v3(connection)
         _record_schema_version(connection, SCHEMA_VERSION)
         connection.commit()
-    elif current_version < 2:
+        return
+
+    if current_version < 2:
         _apply_schema_v2(connection)
         _record_schema_version(connection, 2)
+
+    if current_version < 3:
+        _apply_schema_v3(connection)
+        _record_schema_version(connection, 3)
+
+    if current_version < SCHEMA_VERSION:
         connection.commit()
 
 
@@ -187,6 +196,33 @@ def _apply_schema_v2(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_license_evidence_document_url_id
             ON license_evidence (document_url_id)
+        """
+    )
+
+
+def _apply_schema_v3(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS collection_steps (
+            id INTEGER PRIMARY KEY,
+            query_id INTEGER NOT NULL REFERENCES queries(id) ON DELETE CASCADE,
+            variant_label TEXT NOT NULL,
+            variant_query TEXT NOT NULL,
+            source TEXT NOT NULL,
+            discovery_method TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+            started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            completed_at TEXT,
+            candidate_count INTEGER NOT NULL DEFAULT 0 CHECK (candidate_count >= 0),
+            error_count INTEGER NOT NULL DEFAULT 0 CHECK (error_count >= 0),
+            errors_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_collection_steps_query_id
+            ON collection_steps (query_id);
+        CREATE INDEX IF NOT EXISTS idx_collection_steps_status
+            ON collection_steps (status);
         """
     )
 
