@@ -866,6 +866,74 @@ def test_expansion_stays_within_configured_domain_policy(
 
 
 @pytest.mark.revised
+def test_non_successful_expansion_page_is_skipped_and_frontier_continues(
+    recording_http_client_factory,
+    html_response_factory,
+    http_response_factory,
+    sitemap_candidate_factory,
+) -> None:
+    redirecting_page = sitemap_candidate_factory(
+        title="Donation Page",
+        url="https://openstax.org/give",
+        query="original query",
+        score=None,
+    )
+    healthy_page = sitemap_candidate_factory(
+        title="Healthy Landing Page",
+        url="https://openstax.org/books/college-success/pages/index",
+        query="original query",
+        score=None,
+    )
+    http_client = recording_http_client_factory.from_mapping(
+        {
+            "https://openstax.org/give": http_response_factory(
+                url="https://openstax.org/give",
+                status_code=301,
+                content_type="text/html",
+                headers={
+                    "location": "https://riceconnect.rice.edu/donation/support-openstax"
+                },
+                content=b"<html><body>Moved permanently.</body></html>",
+            ),
+            "https://openstax.org/books/college-success/pages/index": html_response_factory(
+                url="https://openstax.org/books/college-success/pages/index",
+                content=b"""
+                <html>
+                  <body>
+                    <a href="/reports/open-report.pdf">Open report PDF</a>
+                  </body>
+                </html>
+                """,
+            ),
+        }
+    )
+    adapter = LinkExpansionAdapter(
+        http_client=http_client,
+        config=LinkExpansionConfig(max_depth=1, max_candidates=10),
+    )
+
+    candidates = adapter.expand(
+        [redirecting_page, healthy_page],
+        query="machine learning",
+    )
+
+    assert http_client.urls == [
+        "https://openstax.org/give",
+        "https://openstax.org/books/college-success/pages/index",
+    ]
+    assert [(candidate.title, candidate.url) for candidate in candidates] == [
+        ("Open report PDF", "https://openstax.org/reports/open-report.pdf")
+    ]
+    assert candidates[0].metadata == {
+        "source_candidate_url": "https://openstax.org/books/college-success/pages/index",
+        "source_page_url": "https://openstax.org/books/college-success/pages/index",
+        "anchor_text": "Open report PDF",
+        "depth": 1,
+        "url_type": "pdf",
+    }
+
+
+@pytest.mark.revised
 def test_frontier_stops_at_configured_depth_and_candidate_limits(
     recording_http_client_factory,
     html_response_factory,
