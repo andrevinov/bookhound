@@ -15,6 +15,7 @@ from bookhound.http_client import (
 )
 from bookhound.models import DiscoveryMethod, RawCandidate, SourceKind
 from bookhound.sources import SourceAdapter, SourceAvailabilityError
+from bookhound.text_decoding import decode_http_text
 from bookhound.url_normalization import (
     safe_is_direct_pdf_url,
     title_from_url,
@@ -139,7 +140,7 @@ class SeedCrawlerAdapter(SourceAdapter):
                 )
 
             visited_pages.add(page_url)
-            page_links = parse_links(response.content.decode("utf-8"))
+            page_links = parse_links(decode_http_text(response.content, response.headers))
             for link in page_links:
                 absolute_url = urljoin(page_url, link.href)
                 if not _domain_allowed(
