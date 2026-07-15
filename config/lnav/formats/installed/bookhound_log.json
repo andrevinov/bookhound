@@ -1,0 +1,353 @@
+{
+  "$schema": "https://lnav.org/schemas/format-v1.schema.json",
+  "bookhound_log": {
+    "title": "Bookhound JSON Lines log",
+    "description": "Structured JSON Lines emitted by the Bookhound CLI.",
+    "file-type": "json",
+    "timestamp-field": "timestamp",
+    "level-field": "level",
+    "body-field": "message",
+    "opid-field": "run_id",
+    "hide-extra": true,
+    "level": {
+      "critical": "CRITICAL",
+      "error": "ERROR",
+      "warning": "WARNING|WARN",
+      "info": "INFO",
+      "debug": "DEBUG"
+    },
+    "line-format": [
+      {
+        "field": "__timestamp__"
+      },
+      " ",
+      {
+        "field": "__level__",
+        "text-transform": "uppercase",
+        "min-width": 5,
+        "max-width": 5,
+        "overflow": "truncate",
+        "prefix": "[",
+        "suffix": "]"
+      },
+      " ",
+      {
+        "field": "event",
+        "min-width": 28,
+        "max-width": 36,
+        "overflow": "abbrev"
+      },
+      " ",
+      {
+        "field": "logger",
+        "min-width": 24,
+        "max-width": 32,
+        "overflow": "abbrev"
+      },
+      " ",
+      {
+        "field": "message"
+      },
+      " ",
+      {
+        "field": "status_code",
+        "default-value": "",
+        "max-width": 3,
+        "overflow": "truncate"
+      },
+      " ",
+      {
+        "field": "url",
+        "default-value": "",
+        "max-width": 80,
+        "overflow": "abbrev"
+      }
+    ],
+    "value": {
+      "timestamp": {
+        "kind": "string",
+        "description": "UTC timestamp emitted by Bookhound."
+      },
+      "level": {
+        "kind": "string",
+        "description": "Python logging level.",
+        "identifier": true,
+        "foreign-key": true
+      },
+      "logger": {
+        "kind": "string",
+        "description": "Python logger name.",
+        "identifier": true
+      },
+      "event": {
+        "kind": "string",
+        "description": "Stable Bookhound event identifier.",
+        "identifier": true
+      },
+      "message": {
+        "kind": "string",
+        "description": "Human readable log message."
+      },
+      "mode": {
+        "kind": "string",
+        "description": "CLI mode.",
+        "identifier": true,
+        "hidden": true
+      },
+      "run_id": {
+        "kind": "string",
+        "description": "Command execution identifier.",
+        "identifier": true,
+        "hidden": true
+      },
+      "keyword": {
+        "kind": "string",
+        "description": "Search keyword for command and discovery events.",
+        "identifier": true,
+        "hidden": true
+      },
+      "query": {
+        "kind": "string",
+        "description": "Concrete query sent to a source.",
+        "hidden": true
+      },
+      "query_variant_label": {
+        "kind": "string",
+        "description": "Query planner variant label.",
+        "identifier": true,
+        "hidden": true
+      },
+      "source": {
+        "kind": "string",
+        "description": "Discovery source.",
+        "identifier": true,
+        "hidden": true
+      },
+      "discovery_method": {
+        "kind": "string",
+        "description": "Discovery method used by a source.",
+        "identifier": true,
+        "hidden": true
+      },
+      "method": {
+        "kind": "string",
+        "description": "HTTP method.",
+        "identifier": true,
+        "hidden": true
+      },
+      "url": {
+        "kind": "string",
+        "description": "Sanitized URL."
+      },
+      "rate_limit_key": {
+        "kind": "string",
+        "description": "HTTP rate-limit bucket.",
+        "identifier": true,
+        "hidden": true
+      },
+      "local_path": {
+        "kind": "string",
+        "description": "Local path for a downloaded PDF.",
+        "hidden": true
+      },
+      "output": {
+        "kind": "string",
+        "description": "Export output path.",
+        "hidden": true
+      },
+      "format": {
+        "kind": "string",
+        "description": "Export or logging format.",
+        "identifier": true,
+        "hidden": true
+      },
+      "error": {
+        "kind": "string",
+        "description": "Error message.",
+        "hidden": true
+      },
+      "error_kind": {
+        "kind": "string",
+        "description": "Source error category.",
+        "identifier": true,
+        "hidden": true
+      },
+      "license_status": {
+        "kind": "string",
+        "description": "License decision status.",
+        "identifier": true,
+        "hidden": true
+      },
+      "sha256": {
+        "kind": "string",
+        "description": "Downloaded file SHA-256 hash.",
+        "hidden": true
+      },
+      "duration_ms": {
+        "kind": "integer",
+        "description": "Operation duration in milliseconds.",
+        "hidden": true
+      },
+      "wait_seconds": {
+        "kind": "float",
+        "description": "HTTP rate-limit wait time.",
+        "hidden": true
+      },
+      "attempt": {
+        "kind": "integer",
+        "description": "HTTP attempt number.",
+        "hidden": true
+      },
+      "total_attempts": {
+        "kind": "integer",
+        "description": "Total HTTP attempts allowed.",
+        "hidden": true
+      },
+      "status_code": {
+        "kind": "integer",
+        "description": "HTTP status code.",
+        "identifier": true
+      },
+      "result_count": {
+        "kind": "integer",
+        "description": "Visible search result count.",
+        "hidden": true
+      },
+      "total_result_count": {
+        "kind": "integer",
+        "description": "Total search result count.",
+        "hidden": true
+      },
+      "candidate_count": {
+        "kind": "integer",
+        "description": "Candidate count.",
+        "hidden": true
+      },
+      "raw_candidate_count": {
+        "kind": "integer",
+        "description": "Raw candidate count before merge.",
+        "hidden": true
+      },
+      "variant_count": {
+        "kind": "integer",
+        "description": "Query variant count.",
+        "hidden": true
+      },
+      "source_count": {
+        "kind": "integer",
+        "description": "Source count.",
+        "hidden": true
+      },
+      "event_count": {
+        "kind": "integer",
+        "description": "Persisted or source event count.",
+        "hidden": true
+      },
+      "error_count": {
+        "kind": "integer",
+        "description": "Error count.",
+        "hidden": true
+      },
+      "total": {
+        "kind": "integer",
+        "description": "Total items in a summary.",
+        "hidden": true
+      },
+      "new": {
+        "kind": "integer",
+        "description": "New persisted candidates.",
+        "hidden": true
+      },
+      "updated": {
+        "kind": "integer",
+        "description": "Updated persisted candidates.",
+        "hidden": true
+      },
+      "duplicate": {
+        "kind": "integer",
+        "description": "Duplicate persisted candidates.",
+        "hidden": true
+      },
+      "downloaded": {
+        "kind": "integer",
+        "description": "Downloaded candidate count.",
+        "hidden": true
+      },
+      "blocked": {
+        "kind": "integer",
+        "description": "License-blocked candidate count.",
+        "hidden": true
+      },
+      "pending": {
+        "kind": "integer",
+        "description": "Pending candidate count.",
+        "hidden": true
+      },
+      "failed": {
+        "kind": "integer",
+        "description": "Failed candidate count.",
+        "hidden": true
+      },
+      "row_count": {
+        "kind": "integer",
+        "description": "Exported row count.",
+        "hidden": true
+      },
+      "job_id": {
+        "kind": "integer",
+        "description": "Crawl job identifier.",
+        "identifier": true,
+        "hidden": true
+      },
+      "priority": {
+        "kind": "integer",
+        "description": "Crawl job priority.",
+        "hidden": true
+      },
+      "document_id": {
+        "kind": "integer",
+        "description": "Persisted document identifier.",
+        "identifier": true,
+        "hidden": true
+      },
+      "document_url_id": {
+        "kind": "integer",
+        "description": "Persisted document URL identifier.",
+        "identifier": true,
+        "hidden": true
+      },
+      "size_bytes": {
+        "kind": "integer",
+        "description": "Downloaded file size.",
+        "hidden": true
+      },
+      "locked": {
+        "kind": "boolean",
+        "description": "Daemon lock state.",
+        "hidden": true
+      },
+      "cache": {
+        "kind": "boolean",
+        "description": "HTTP cache flag.",
+        "hidden": true
+      }
+    },
+    "sample": [
+      {
+        "description": "Command boundary event",
+        "line": "{\"event\":\"search.started\",\"keyword\":\"machine learning\",\"level\":\"INFO\",\"logger\":\"bookhound.cli\",\"message\":\"Command started.\",\"mode\":\"search\",\"run_id\":\"0123456789abcdef\",\"timestamp\":\"2026-07-15T05:36:31.724Z\"}",
+        "level": "info"
+      },
+      {
+        "description": "HTTP diagnostic event",
+        "line": "{\"attempt\":1,\"event\":\"http.request_started\",\"level\":\"DEBUG\",\"logger\":\"bookhound.http_client\",\"message\":\"HTTP request started.\",\"method\":\"GET\",\"rate_limit_key\":\"source:arxiv\",\"timestamp\":\"2026-07-15T05:36:31.725Z\",\"total_attempts\":1,\"url\":\"https://export.arxiv.org/api/query\"}",
+        "level": "debug"
+      },
+      {
+        "description": "Download validation event",
+        "line": "{\"document_id\":1,\"document_url_id\":2,\"error\":\"Response content type is not PDF: text/html.\",\"event\":\"download.validation_failed\",\"level\":\"WARNING\",\"logger\":\"bookhound.downloader\",\"message\":\"Download response validation failed.\",\"status_code\":200,\"timestamp\":\"2026-07-15T05:36:35.125Z\",\"url\":\"https://example.org/report.pdf\"}",
+        "level": "warning"
+      }
+    ]
+  }
+}
