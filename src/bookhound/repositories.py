@@ -8,7 +8,10 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-from bookhound.discovery_pipeline import DiscoveryPipelineResult
+from bookhound.discovery_pipeline import (
+    DiscoveryPipelineResult,
+    DiscoveryStepResult,
+)
 from bookhound.models import (
     DiscoveryMethod,
     Document,
@@ -62,6 +65,102 @@ class RepositorySet:
 
     def close(self) -> None:
         self.connection.close()
+
+    def begin_collection(self, query_plan: QueryPlan) -> int:
+        variants = [variant.query for variant in query_plan.variants]
+        try:
+            self.connection.execute("BEGIN")
+            query_id = self.queries.create(
+                SearchQuery(
+                    keyword=query_plan.keyword,
+                    mode=ExecutionMode.COLLECT,
+                    variants=variants,
+                ),
+                parameters={},
+                commit=False,
+            )
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
+        return query_id
+
+    def save_collection_step(
+        self,
+        query_id: int,
+        step: DiscoveryStepResult,
+    ) -> CollectSummary:
+        summary = CollectSummary(
+            total=len(step.candidates),
+            new=0,
+            updated=0,
+            duplicate=0,
+        )
+
+        try:
+            self.connection.execute("BEGIN")
+            if step.status == "failed":
+                self.collection_steps.record_failed(
+                    query_id=query_id,
+                    variant_label=step.variant.label,
+                    variant_query=step.variant.query,
+                    source=step.source,
+                    discovery_method=step.discovery_method,
+                    candidate_count=len(step.candidates),
+                    errors=list(step.errors),
+                    metadata={},
+                    commit=False,
+                )
+            elif step.status == "completed":
+                step_id = self.collection_steps.create_running(
+                    query_id=query_id,
+                    variant_label=step.variant.label,
+                    variant_query=step.variant.query,
+                    source=step.source,
+                    discovery_method=step.discovery_method,
+                    metadata={},
+                    commit=False,
+                )
+                for candidate in step.candidates:
+                    summary = self._save_discovery_candidate(
+                        candidate,
+                        summary,
+                        collection_query=step.variant.query,
+                    )
+                self.collection_steps.mark_completed(
+                    step_id,
+                    candidate_count=len(step.candidates),
+                    errors=list(step.errors),
+                    metadata={},
+                    commit=False,
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported collection step status: {step.status}"
+                )
+            self.connection.commit()
+        except Exception as error:
+            self.connection.rollback()
+            logger.error(
+                "Collection step persistence failed.",
+                exc_info=True,
+                extra={
+                    "event": "collect.step.persistence.failed",
+                    "keyword": step.query_plan.keyword,
+                    "query_id": query_id,
+                    "query_variant_label": step.variant.label,
+                    "source": step.source.value,
+                    "discovery_method": step.discovery_method.value,
+                    "status": step.status,
+                    "candidate_count": len(step.candidates),
+                    "error_count": len(step.errors),
+                    "error": str(error),
+                },
+            )
+            raise
+
+        return summary
 
     def save_discovery_result(
         self,
