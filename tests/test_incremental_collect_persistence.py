@@ -278,6 +278,207 @@ def test_failed_step_persistence_rolls_back_only_current_step(
         repositories.close()
 
 
+@pytest.mark.revised
+def test_incremental_steps_do_not_duplicate_same_canonical_url(
+    tmp_path: Path,
+    sitemap_candidate_factory,
+    common_crawl_candidate_factory,
+    count_rows_helper,
+) -> None:
+    repositories = RepositorySet(initialize_database(tmp_path / "bookhound.sqlite3"))
+    query_plan = _query_plan("canonical duplicate")
+    variant = query_plan.variants[0]
+    first_candidate = sitemap_candidate_factory(
+        title="Sitemap Duplicate",
+        url="https://Example.org/reports/shared.pdf?utm_source=sitemap",
+        query=variant.query,
+    )
+    duplicate_candidate = common_crawl_candidate_factory(
+        title="Common Crawl Duplicate",
+        url="https://example.org/reports/shared.pdf",
+        query=variant.query,
+    )
+
+    try:
+        query_id = repositories.begin_collection(query_plan)
+        first_summary = repositories.save_collection_step(
+            query_id,
+            _step(
+                query_plan=query_plan,
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                status="completed",
+                candidates=[first_candidate],
+            ),
+        )
+        duplicate_summary = repositories.save_collection_step(
+            query_id,
+            _step(
+                query_plan=query_plan,
+                source=SourceKind.COMMON_CRAWL,
+                discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                status="completed",
+                candidates=[duplicate_candidate],
+            ),
+        )
+
+        assert first_summary.total == 1
+        assert first_summary.new == 1
+        assert duplicate_summary.total == 1
+        assert duplicate_summary.duplicate == 1
+        assert count_rows_helper(repositories.connection, "collection_steps") == 2
+        assert count_rows_helper(repositories.connection, "sources") == 2
+        assert count_rows_helper(repositories.connection, "documents") == 1
+        assert count_rows_helper(repositories.connection, "document_urls") == 1
+    finally:
+        repositories.close()
+
+
+@pytest.mark.revised
+def test_incremental_duplicate_step_updates_source_occurrences(
+    tmp_path: Path,
+    sitemap_candidate_factory,
+    common_crawl_candidate_factory,
+) -> None:
+    repositories = RepositorySet(initialize_database(tmp_path / "bookhound.sqlite3"))
+    query_plan = _query_plan("occurrence merge")
+    variant = query_plan.variants[0]
+    sitemap_candidate = sitemap_candidate_factory(
+        title="Occurrence Merge",
+        url="https://example.org/reports/occurrence.pdf?utm_source=sitemap",
+        query=variant.query,
+    )
+    common_crawl_candidate = common_crawl_candidate_factory(
+        title="Occurrence Merge",
+        url="https://example.org/reports/occurrence.pdf",
+        query=variant.query,
+    )
+
+    try:
+        query_id = repositories.begin_collection(query_plan)
+        repositories.save_collection_step(
+            query_id,
+            _step(
+                query_plan=query_plan,
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                status="completed",
+                candidates=[sitemap_candidate],
+            ),
+        )
+        repositories.save_collection_step(
+            query_id,
+            _step(
+                query_plan=query_plan,
+                source=SourceKind.COMMON_CRAWL,
+                discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                status="completed",
+                candidates=[common_crawl_candidate],
+            ),
+        )
+
+        metadata_json = repositories.connection.execute(
+            """
+            SELECT metadata_json
+            FROM document_urls
+            WHERE canonical_url = ?
+            """,
+            ("https://example.org/reports/occurrence.pdf",),
+        ).fetchone()[0]
+
+        assert json.loads(metadata_json)["source_occurrences"] == [
+            {
+                "source": "sitemap",
+                "discovery_method": "sitemap",
+                "query_variant_label": "quoted",
+                "query": '"occurrence merge"',
+            },
+            {
+                "source": "common_crawl",
+                "discovery_method": "public_index",
+                "query_variant_label": "quoted",
+                "query": '"occurrence merge"',
+            },
+        ]
+    finally:
+        repositories.close()
+
+
+@pytest.mark.revised
+def test_incremental_summary_counts_duplicates_consistently(
+    tmp_path: Path,
+    sitemap_candidate_factory,
+    common_crawl_candidate_factory,
+    count_rows_helper,
+) -> None:
+    repositories = RepositorySet(initialize_database(tmp_path / "bookhound.sqlite3"))
+    query_plan = _query_plan("summary consistency")
+    variant = query_plan.variants[0]
+    first_candidate = common_crawl_candidate_factory(
+        title="Summary Consistency",
+        url="https://example.org/reports/summary.pdf",
+        query=variant.query,
+        metadata={"doi": "10.1234/summary-consistency"},
+    )
+    duplicate_candidate = sitemap_candidate_factory(
+        title="Summary Consistency Duplicate",
+        url="https://example.org/reports/summary.pdf?utm_source=sitemap",
+        query=variant.query,
+        metadata={"doi": "10.1234/summary-consistency"},
+    )
+    updated_candidate = sitemap_candidate_factory(
+        title="Summary Consistency Updated",
+        url="https://example.org/reports/summary-v2.pdf",
+        query=variant.query,
+        metadata={"doi": "10.1234/summary-consistency"},
+    )
+
+    try:
+        query_id = repositories.begin_collection(query_plan)
+        summaries = [
+            repositories.save_collection_step(
+                query_id,
+                _step(
+                    query_plan=query_plan,
+                    source=SourceKind.COMMON_CRAWL,
+                    discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                    status="completed",
+                    candidates=[first_candidate],
+                ),
+            ),
+            repositories.save_collection_step(
+                query_id,
+                _step(
+                    query_plan=query_plan,
+                    source=SourceKind.SITEMAP,
+                    discovery_method=DiscoveryMethod.SITEMAP,
+                    status="completed",
+                    candidates=[duplicate_candidate],
+                ),
+            ),
+            repositories.save_collection_step(
+                query_id,
+                _step(
+                    query_plan=query_plan,
+                    source=SourceKind.SITEMAP,
+                    discovery_method=DiscoveryMethod.SITEMAP,
+                    status="completed",
+                    candidates=[updated_candidate],
+                ),
+            ),
+        ]
+
+        assert [summary.total for summary in summaries] == [1, 1, 1]
+        assert sum(summary.new for summary in summaries) == 1
+        assert sum(summary.updated for summary in summaries) == 1
+        assert sum(summary.duplicate for summary in summaries) == 1
+        assert count_rows_helper(repositories.connection, "documents") == 1
+        assert count_rows_helper(repositories.connection, "document_urls") == 2
+        assert count_rows_helper(repositories.connection, "collection_steps") == 3
+    finally:
+        repositories.close()
+
+
 def _query_plan(keyword: str) -> QueryPlan:
     return QueryPlan(
         keyword=keyword,
