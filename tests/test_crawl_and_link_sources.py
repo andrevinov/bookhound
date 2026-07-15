@@ -934,6 +934,53 @@ def test_non_successful_expansion_page_is_skipped_and_frontier_continues(
 
 
 @pytest.mark.revised
+def test_expansion_decodes_non_utf8_html_and_extracts_links(
+    recording_http_client_factory,
+    html_response_factory,
+    sitemap_candidate_factory,
+) -> None:
+    landing_page = sitemap_candidate_factory(
+        title="Legacy Encoded Landing Page",
+        url="https://example.org/reports/legacy",
+        query="original query",
+        score=None,
+    )
+    html = b"""
+    <html>
+      <body>
+        <p>Legacy text byte: \xf4</p>
+        <a href="/reports/legacy.pdf">Legacy PDF</a>
+      </body>
+    </html>
+    """
+    adapter = LinkExpansionAdapter(
+        http_client=recording_http_client_factory.from_mapping(
+            {
+                "https://example.org/reports/legacy": html_response_factory(
+                    url="https://example.org/reports/legacy",
+                    content=html,
+                    headers={"content-type": "text/html; charset=windows-1252"},
+                )
+            }
+        ),
+        config=LinkExpansionConfig(max_depth=1, max_candidates=10),
+    )
+
+    candidates = adapter.expand([landing_page], query="legacy encoding")
+
+    assert [(candidate.title, candidate.url) for candidate in candidates] == [
+        ("Legacy PDF", "https://example.org/reports/legacy.pdf")
+    ]
+    assert candidates[0].metadata == {
+        "source_candidate_url": "https://example.org/reports/legacy",
+        "source_page_url": "https://example.org/reports/legacy",
+        "anchor_text": "Legacy PDF",
+        "depth": 1,
+        "url_type": "pdf",
+    }
+
+
+@pytest.mark.revised
 def test_frontier_stops_at_configured_depth_and_candidate_limits(
     recording_http_client_factory,
     html_response_factory,
