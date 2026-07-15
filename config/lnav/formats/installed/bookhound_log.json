@@ -50,6 +50,13 @@
       },
       " ",
       {
+        "field": "error",
+        "default-value": "",
+        "max-width": 100,
+        "overflow": "abbrev"
+      },
+      " ",
+      {
         "field": "status_code",
         "default-value": "",
         "max-width": 3,
@@ -164,6 +171,17 @@
       "error": {
         "kind": "string",
         "description": "Error message.",
+        "hidden": true
+      },
+      "error_type": {
+        "kind": "string",
+        "description": "Python exception class name.",
+        "identifier": true,
+        "hidden": true
+      },
+      "exception": {
+        "kind": "string",
+        "description": "Formatted exception traceback.",
         "hidden": true
       },
       "error_kind": {
