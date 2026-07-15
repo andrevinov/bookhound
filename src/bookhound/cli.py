@@ -486,10 +486,11 @@ def _log_command_failed(
         **context,
         "event": event,
         "error": str(error),
+        "error_type": type(error).__name__,
     }
     if started_at is not None:
         metadata["duration_ms"] = _duration_ms(started_at)
-    logger.error("Command failed.", extra=metadata)
+    logger.error("Command failed.", exc_info=True, extra=metadata)
 
 
 def _duration_ms(started_at: float) -> int:
