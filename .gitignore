@@ -1,5 +1,6 @@
 .venv/
 .local/
+.collab-notes/
 config/*.with-secrets.toml
 __pycache__/
 .pytest_cache/

@@ -19,6 +19,14 @@ User-facing examples may include non-English search keywords when they are
 relevant to Bookhound's PDF discovery behavior, but the surrounding explanation
 must remain in English.
 
+## Local collaboration notes
+
+Use `.collab-notes/` for private local reports, plans, and working notes shared
+between the user and Codex during implementation. The directory must stay
+untracked by git and excluded from Docker build contexts. Unlike tracked
+repository documentation, all materials inside `.collab-notes/` must be written
+in Portuguese to support the local collaboration workflow.
+
 ## Project direction
 
 Bookhound is a Python CLI for discovering PDFs by keyword, storing URLs and
@@ -79,66 +87,3 @@ name, or expected assertions are changed.
 - Whenever the public local Docker config template is expanded with new secret
   fields, mirror the same fields in the `with-secrets` file and fill in the
   local secret values there.
-
-## PRAIA remediation workflow
-
-Files under `docs/code-audit/praia/` are audit findings, not automatically
-approved implementation tasks.
-
-Before modifying production code or tests for a PRAIA finding:
-
-1. Read the finding, the level summary, and the level backlog.
-2. Validate that the cited evidence still matches the current repository state.
-3. Check whether the finding duplicates or shares a root cause with another
-   finding.
-4. Wait for the user to mark the finding as `Accepted`.
-5. Work on only one accepted finding, or one explicitly approved root-cause
-   group, at a time.
-
-For each accepted finding:
-
-1. Perform a repository-wide search for existing classes, functions, fixtures,
-   protocols, helpers, and abstractions related to the change.
-2. Produce a short change plan listing:
-   - files to modify;
-   - files to create;
-   - existing components to reuse;
-   - architectural boundaries affected;
-   - tests required;
-   - risks and behavior that must be preserved.
-3. Do not create a new file, class, protocol, repository, service, fixture, or
-   helper when an existing cohesive component can reasonably be extended.
-4. Write focused regression or characterization tests before changing
-   production code.
-5. Stop after writing the tests so the user can review them, following the
-   existing revised-test workflow.
-6. After approval, implement the smallest coherent change that resolves the
-   root cause, not merely the visible symptom.
-7. Run the focused tests and the complete relevant test suite.
-8. Recheck the original evidence and acceptance criteria.
-9. Update the finding and backlog with the result, affected files, tests added,
-   and final status.
-
-A finding may use the following statuses:
-
-- `Proposed`
-- `Needs Evidence`
-- `Accepted`
-- `In Progress`
-- `Resolved`
-- `Rejected`
-- `Deferred`
-
-Do not:
-
-- implement all PRAIA findings in a single change;
-- assume that every audit conclusion is correct;
-- modify production code for a `Proposed`, `Needs Evidence`, `Rejected`, or
-  `Deferred` finding;
-- create parallel implementations of existing concepts;
-- solve an architectural finding only by mocking around the problem;
-- mark a finding as resolved merely because its new focused test passes;
-- begin the next PRAIA level until the user explicitly requests it.
-
-After resolving all accepted P0 and P1 findings from a level, perform a focused
-verification audit of that level before proceeding to the next one.
