@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
 import logging
 import time
-from typing import Protocol
+from typing import Iterator, Protocol
 
-from bookhound.models import RawCandidate
+from bookhound.models import DiscoveryMethod, RawCandidate, SourceKind
 from bookhound.query_planner import PlannedQueryVariant, QueryPlan, QueryPlanner
 from bookhound.sources import SourceAdapter, run_source_search
 from bookhound.url_normalization import canonicalize_url
@@ -15,6 +15,18 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class DiscoveryPipelineResult:
     query_plan: QueryPlan
+    candidates: list[RawCandidate]
+    errors: list[str]
+    events: list[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DiscoveryStepResult:
+    query_plan: QueryPlan
+    variant: PlannedQueryVariant
+    source: SourceKind
+    discovery_method: DiscoveryMethod
+    status: str
     candidates: list[RawCandidate]
     errors: list[str]
     events: list[dict[str, object]] = field(default_factory=list)
@@ -41,6 +53,11 @@ class DiscoveryPipeline:
         self.link_expander = link_expander
         self.query_planner = query_planner or QueryPlanner()
 
+    def iter_search(self, keyword: str) -> Iterator[DiscoveryStepResult]:
+        query_plan = self.query_planner.plan_queries(keyword)
+        for variant in query_plan.variants:
+            yield from self._iter_source_steps(query_plan, variant)
+
     def search(self, keyword: str) -> DiscoveryPipelineResult:
         started_at = time.perf_counter()
         query_plan = self.query_planner.plan_queries(keyword)
@@ -50,47 +67,18 @@ class DiscoveryPipeline:
         raw_candidate_count = 0
 
         for variant in query_plan.variants:
-            for source in self.sources:
-                source_started_at = time.perf_counter()
-                logger.debug(
-                    "Source search started.",
-                    extra={
-                        "event": "discovery.source.started",
-                        "keyword": query_plan.keyword,
-                        "query": variant.query,
-                        "query_variant_label": variant.label,
-                        "source": source.source_name.value,
-                        "discovery_method": source.discovery_method.value,
-                    },
-                )
-                source_result = run_source_search(source, query=variant.query)
-                raw_candidate_count += len(source_result.candidates)
+            for step in self._iter_source_steps(query_plan, variant):
+                raw_candidate_count += len(step.candidates)
                 errors.extend(
-                    f"{source_result.source.value}: {error}"
-                    for error in source_result.errors
+                    f"{step.source.value}: {error}" for error in step.errors
                 )
-                events.extend(source_result.events)
-                for candidate in source_result.candidates:
+                events.extend(step.events)
+                for candidate in step.candidates:
                     _add_candidate(
                         candidates_by_canonical_url,
                         candidate,
                         variant,
                     )
-                logger.debug(
-                    "Source search completed.",
-                    extra={
-                        "event": "discovery.source.completed",
-                        "keyword": query_plan.keyword,
-                        "query": variant.query,
-                        "query_variant_label": variant.label,
-                        "source": source_result.source.value,
-                        "discovery_method": source_result.discovery_method.value,
-                        "candidate_count": len(source_result.candidates),
-                        "error_count": len(source_result.errors),
-                        "event_count": len(source_result.events),
-                        "duration_ms": _duration_ms(source_started_at),
-                    },
-                )
 
             if self.link_expander is not None:
                 expanded_candidates = self.link_expander.expand(
@@ -129,6 +117,51 @@ class DiscoveryPipeline:
             errors=errors,
             events=events,
         )
+
+    def _iter_source_steps(
+        self,
+        query_plan: QueryPlan,
+        variant: PlannedQueryVariant,
+    ) -> Iterator[DiscoveryStepResult]:
+        for source in self.sources:
+            source_started_at = time.perf_counter()
+            logger.debug(
+                "Source search started.",
+                extra={
+                    "event": "discovery.source.started",
+                    "keyword": query_plan.keyword,
+                    "query": variant.query,
+                    "query_variant_label": variant.label,
+                    "source": source.source_name.value,
+                    "discovery_method": source.discovery_method.value,
+                },
+            )
+            source_result = run_source_search(source, query=variant.query)
+            logger.debug(
+                "Source search completed.",
+                extra={
+                    "event": "discovery.source.completed",
+                    "keyword": query_plan.keyword,
+                    "query": variant.query,
+                    "query_variant_label": variant.label,
+                    "source": source_result.source.value,
+                    "discovery_method": source_result.discovery_method.value,
+                    "candidate_count": len(source_result.candidates),
+                    "error_count": len(source_result.errors),
+                    "event_count": len(source_result.events),
+                    "duration_ms": _duration_ms(source_started_at),
+                },
+            )
+            yield DiscoveryStepResult(
+                query_plan=query_plan,
+                variant=variant,
+                source=source_result.source,
+                discovery_method=source_result.discovery_method,
+                status=_step_status(source_result.candidates, source_result.errors),
+                candidates=source_result.candidates,
+                errors=source_result.errors,
+                events=source_result.events,
+            )
 
 
 def _add_candidate(
@@ -205,6 +238,12 @@ def _source_occurrence(
         "query_variant_label": variant.label,
         "query": candidate.query,
     }
+
+
+def _step_status(candidates: list[RawCandidate], errors: list[str]) -> str:
+    if errors and not candidates:
+        return "failed"
+    return "completed"
 
 
 def _duration_ms(started_at: float) -> int:
