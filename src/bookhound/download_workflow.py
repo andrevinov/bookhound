@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
+import logging
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 from bookhound.models import (
     DownloadRecord,
@@ -11,6 +13,9 @@ from bookhound.models import (
     PersistedLicenseEvidence,
     RawCandidate,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class LicenseClassifierProtocol(Protocol):
@@ -89,10 +94,26 @@ class DownloadWorkflowService:
                 candidate,
             )
             if decision.status is LicenseStatus.DENIED:
+                logger.warning(
+                    "Download blocked by license gate.",
+                    extra={
+                        **_candidate_log_extra(candidate, raw_candidate.url),
+                        "event": "download.license.blocked",
+                        "license_status": decision.status.value,
+                    },
+                )
                 summary = _increment_download_summary(summary, blocked=1)
                 continue
             if decision.status is LicenseStatus.UNKNOWN:
                 if not self.prompt.confirm_unknown_license(decision):
+                    logger.warning(
+                        "Download left pending because license is unknown.",
+                        extra={
+                            **_candidate_log_extra(candidate, raw_candidate.url),
+                            "event": "download.license.pending",
+                            "license_status": decision.status.value,
+                        },
+                    )
                     summary = _increment_download_summary(summary, pending=1)
                     continue
                 decision = decision.model_copy(
@@ -112,6 +133,15 @@ class DownloadWorkflowService:
                     interactive=interactive,
                 )
             except Exception as error:
+                logger.error(
+                    "Download candidate failed.",
+                    exc_info=True,
+                    extra={
+                        **_candidate_log_extra(candidate, raw_candidate.url),
+                        "event": "download.candidate.failed",
+                        "error": str(error),
+                    },
+                )
                 summary = _increment_download_summary(
                     summary,
                     failed=1,
@@ -251,3 +281,19 @@ def _download_failure(
         document_url_id=document_url_id if document_url_id > 0 else None,
         error=str(error),
     )
+
+
+def _candidate_log_extra(
+    candidate: PersistedDownloadCandidate | RawCandidate,
+    url: str,
+) -> dict[str, object]:
+    return {
+        "document_id": _candidate_document_id(candidate),
+        "document_url_id": _candidate_document_url_id(candidate),
+        "url": _sanitize_url(url),
+    }
+
+
+def _sanitize_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))

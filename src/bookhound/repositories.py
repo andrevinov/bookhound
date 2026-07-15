@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import logging
 import sqlite3
+import time
 from typing import Any, Iterable
 
 from bookhound.discovery_pipeline import DiscoveryPipelineResult
@@ -24,6 +26,9 @@ from bookhound.models import (
 )
 from bookhound.query_planner import PlannedQueryVariant, QueryPlan
 from bookhound.url_normalization import canonicalize_url, is_direct_pdf_url
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,7 @@ class RepositorySet:
         self,
         result: DiscoveryPipelineResult,
     ) -> CollectSummary:
+        started_at = time.perf_counter()
         variants = [variant.query for variant in result.query_plan.variants]
         summary = CollectSummary(
             total=len(result.candidates),
@@ -119,11 +125,39 @@ class RepositorySet:
                     ),
                     commit=False,
                 )
-        except Exception:
+            self.connection.commit()
+        except Exception as error:
             self.connection.rollback()
+            logger.error(
+                "Collection persistence failed.",
+                exc_info=True,
+                extra={
+                    "event": "collect.persistence.failed",
+                    "keyword": result.query_plan.keyword,
+                    "total": summary.total,
+                    "new": summary.new,
+                    "updated": summary.updated,
+                    "duplicate": summary.duplicate,
+                    "error_count": len(result.errors),
+                    "duration_ms": _duration_ms(started_at),
+                    "error": str(error),
+                },
+            )
             raise
 
-        self.connection.commit()
+        logger.info(
+            "Collection persistence completed.",
+            extra={
+                "event": "collect.persistence.completed",
+                "keyword": result.query_plan.keyword,
+                "total": summary.total,
+                "new": summary.new,
+                "updated": summary.updated,
+                "duplicate": summary.duplicate,
+                "error_count": len(result.errors),
+                "duration_ms": _duration_ms(started_at),
+            },
+        )
         return summary
 
     def _save_discovery_candidate(
@@ -1102,6 +1136,10 @@ def _merge_json_object(existing_json: str, new_values: dict[str, Any]) -> dict[s
 
 def _format_datetime(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, round((time.perf_counter() - started_at) * 1000))
 
 
 def _commit_if_requested(connection: sqlite3.Connection, commit: bool) -> None:

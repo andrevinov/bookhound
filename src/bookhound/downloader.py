@@ -4,9 +4,10 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
+import logging
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from bookhound.http_client import (
     BookhoundHttpClient,
@@ -16,6 +17,9 @@ from bookhound.http_client import (
 )
 from bookhound.models import DownloadRecord, DownloadStatus, LicenseDecision, LicenseStatus
 from bookhound.repositories import RepositorySet
+
+
+logger = logging.getLogger(__name__)
 
 
 class DownloadPrompt(Protocol):
@@ -70,6 +74,18 @@ class DownloadService:
         response = self.http_client.get(url)
         validation_error = _download_response_error(response)
         if validation_error is not None:
+            logger.warning(
+                "Download response validation failed.",
+                extra={
+                    "event": "download.validation_failed",
+                    "document_id": document_id,
+                    "document_url_id": document_url_id,
+                    "url": _sanitize_url(url),
+                    "status_code": response.status_code,
+                    "content_type": _normalized_content_type(response),
+                    "error": validation_error,
+                },
+            )
             return DownloadRecord(
                 url=url,
                 local_path=str(self._download_path(url)),
@@ -99,6 +115,19 @@ class DownloadService:
             size_bytes=size_bytes,
             license_evidence_id=license_evidence_id,
             downloaded_at=downloaded_at,
+        )
+
+        logger.info(
+            "Download completed.",
+            extra={
+                "event": "download.completed",
+                "document_id": document_id,
+                "document_url_id": document_url_id,
+                "url": _sanitize_url(url),
+                "local_path": str(local_path),
+                "size_bytes": size_bytes,
+                "sha256": file_hash,
+            },
         )
 
         return DownloadRecord(
@@ -187,3 +216,8 @@ def _normalized_content_type(response: HttpResponse) -> str:
 def _safe_filename_part(value: str) -> str:
     safe_value = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-")
     return safe_value or "download"
+
+
+def _sanitize_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
