@@ -14,4 +14,7 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       BOOKHOUND_LOG_LEVEL: "DEBUG"
+      BOOKHOUND_LOG_FORMAT: "json"
+      BOOKHOUND_LOG_DESTINATION: "file"
+      BOOKHOUND_LOG_FILE: "/data/bookhound.jsonl"
     command: bash
