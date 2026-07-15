@@ -38,6 +38,35 @@ def test_bookhound_lnav_format_shows_error_summary_in_primary_line() -> None:
     assert error_field["max-width"] > 0
 
 
+@pytest.mark.revised
+def test_bookhound_lnav_format_declares_incremental_collect_fields() -> None:
+    bookhound_format = _bookhound_lnav_format()
+    values = bookhound_format["value"]
+    line_fields = _line_format_fields(bookhound_format["line-format"])
+
+    expected_fields = {
+        "query_id": "integer",
+        "step_id": "integer",
+        "query_variant_label": "string",
+        "source": "string",
+        "candidate_count": "integer",
+        "new": "integer",
+        "updated": "integer",
+        "duplicate": "integer",
+        "error_count": "integer",
+    }
+    for field_name, expected_kind in expected_fields.items():
+        assert values[field_name]["kind"] == expected_kind
+
+    for field_name in (
+        "source",
+        "query_variant_label",
+        "candidate_count",
+        "error_count",
+    ):
+        assert field_name in line_fields
+
+
 def _bookhound_lnav_format() -> dict[str, object]:
     payload = json.loads(LNAV_FORMAT_PATH.read_text(encoding="utf-8"))
     return payload["bookhound_log"]

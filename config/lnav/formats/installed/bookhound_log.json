@@ -46,6 +46,36 @@
       },
       " ",
       {
+        "field": "source",
+        "default-value": "",
+        "min-width": 10,
+        "max-width": 16,
+        "overflow": "abbrev"
+      },
+      " ",
+      {
+        "field": "query_variant_label",
+        "default-value": "",
+        "min-width": 8,
+        "max-width": 12,
+        "overflow": "abbrev"
+      },
+      " ",
+      {
+        "field": "candidate_count",
+        "default-value": "",
+        "max-width": 5,
+        "overflow": "truncate"
+      },
+      " ",
+      {
+        "field": "error_count",
+        "default-value": "",
+        "max-width": 5,
+        "overflow": "truncate"
+      },
+      " ",
+      {
         "field": "message"
       },
       " ",
@@ -104,6 +134,18 @@
       "run_id": {
         "kind": "string",
         "description": "Command execution identifier.",
+        "identifier": true,
+        "hidden": true
+      },
+      "query_id": {
+        "kind": "integer",
+        "description": "Persisted collection query identifier.",
+        "identifier": true,
+        "hidden": true
+      },
+      "step_id": {
+        "kind": "integer",
+        "description": "Persisted collection step identifier.",
         "identifier": true,
         "hidden": true
       },

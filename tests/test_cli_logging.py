@@ -137,6 +137,68 @@ def test_collect_emits_summary_log_with_counts(
 
 
 @pytest.mark.revised
+def test_collect_emits_incremental_run_and_step_logs(
+    tmp_path: Path,
+    monkeypatch,
+    recording_pipeline_factory,
+    sitemap_candidate_factory,
+) -> None:
+    pipeline = recording_pipeline_factory(
+        [
+            sitemap_candidate_factory(
+                title="Incremental Logging Report",
+                url="https://example.org/incremental-logging.pdf",
+            )
+        ]
+    )
+    monkeypatch.setattr(cli, "build_search_pipeline", lambda: pipeline, raising=False)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["collect", "incremental logging"],
+        env=_logging_env(tmp_path),
+    )
+
+    assert result.exit_code == 0
+    logs = _json_logs(result.stderr)
+    run_started = _event(logs, "collect.run.started")
+    step_started = _event(logs, "collect.step.started")
+    step_completed = _event(logs, "collect.step.completed")
+    run_completed = _event(logs, "collect.run.completed")
+
+    assert run_started["mode"] == "collect"
+    assert run_started["keyword"] == "incremental logging"
+    assert run_started["query_id"] > 0
+    assert step_started["query_id"] == run_started["query_id"]
+    assert step_started["query_variant_label"] == "quoted"
+    assert step_started["query"] == '"incremental logging"'
+    assert step_started["source"] == "sitemap"
+    assert step_started["discovery_method"] == "sitemap"
+    assert step_started["candidate_count"] == 1
+    assert step_started["error_count"] == 0
+    assert step_completed["query_id"] == run_started["query_id"]
+    assert step_completed["source"] == "sitemap"
+    assert step_completed["candidate_count"] == 1
+    assert step_completed["new"] == 1
+    assert step_completed["updated"] == 0
+    assert step_completed["duplicate"] == 0
+    assert step_completed["duration_ms"] >= 0
+    assert run_completed["query_id"] == run_started["query_id"]
+    assert run_completed["total"] == 1
+    assert run_completed["new"] == 1
+    assert run_completed["updated"] == 0
+    assert run_completed["duplicate"] == 0
+    assert run_completed["error_count"] == 0
+    assert run_completed["duration_ms"] >= 0
+    assert {
+        run_started["run_id"],
+        step_started["run_id"],
+        step_completed["run_id"],
+        run_completed["run_id"],
+    } == {run_started["run_id"]}
+
+
+@pytest.mark.revised
 def test_download_emits_summary_log_without_bypassing_cli_output(
     tmp_path: Path,
     monkeypatch,
@@ -313,6 +375,51 @@ def test_unexpected_command_failure_logs_error_type_and_traceback(
     assert failure_log["error_type"] == "RuntimeError"
     assert "Traceback (most recent call last)" in failure_log["exception"]
     assert "RuntimeError: simulated pipeline failure" in failure_log["exception"]
+
+
+@pytest.mark.revised
+def test_collect_fatal_failure_emits_incremental_run_failed_log(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FailingPipeline:
+        def iter_search(self, keyword: str):
+            assert keyword == "incremental runtime failure"
+            raise RuntimeError("simulated incremental failure")
+            yield
+
+    monkeypatch.setattr(
+        cli,
+        "build_search_pipeline",
+        lambda: FailingPipeline(),
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["collect", "incremental runtime failure"],
+        env=_logging_env(tmp_path),
+    )
+
+    assert result.exit_code == 1
+    logs = _json_logs(result.stderr)
+    run_failed = _event(logs, "collect.run.failed")
+    command_failed = _event(logs, "collect.failed")
+
+    assert run_failed["level"] == "ERROR"
+    assert run_failed["mode"] == "collect"
+    assert run_failed["keyword"] == "incremental runtime failure"
+    assert run_failed["query_id"] is None
+    assert run_failed["total"] == 0
+    assert run_failed["new"] == 0
+    assert run_failed["updated"] == 0
+    assert run_failed["duplicate"] == 0
+    assert run_failed["error_count"] == 0
+    assert run_failed["error"] == "simulated incremental failure"
+    assert run_failed["error_type"] == "RuntimeError"
+    assert "RuntimeError: simulated incremental failure" in run_failed["exception"]
+    assert command_failed["event"] == "collect.failed"
+    assert command_failed["error"] == "simulated incremental failure"
 
 
 def _logging_env(

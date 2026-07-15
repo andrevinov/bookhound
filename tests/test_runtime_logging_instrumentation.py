@@ -1,16 +1,25 @@
+from datetime import datetime, timezone
 import logging
+import sqlite3
 
 import pytest
 
-from bookhound.discovery_pipeline import DiscoveryPipeline
+from bookhound.database import initialize_database
+from bookhound.discovery_pipeline import DiscoveryPipeline, DiscoveryStepResult
 from bookhound.http_client import (
     BookhoundHttpClient,
     HttpClientConfig,
     HttpResponse,
     HttpTimeoutError,
 )
-from bookhound.models import DiscoveryMethod, SourceKind
-from bookhound.query_planner import QueryPlanner, QueryPlannerConfig
+from bookhound.models import DiscoveryMethod, LicenseEvidence, SourceKind
+from bookhound.query_planner import (
+    PlannedQueryVariant,
+    QueryPlan,
+    QueryPlanner,
+    QueryPlannerConfig,
+)
+from bookhound.repositories import RepositorySet
 from bookhound.sources import (
     DisabledSourceAdapter,
     FakeSourceAdapter,
@@ -322,6 +331,118 @@ def test_http_client_logs_cache_and_rate_limit_at_debug(caplog) -> None:
     assert clock.sleep_calls == [0.5]
 
 
+@pytest.mark.revised
+def test_collect_incremental_logs_step_persistence_completed(
+    caplog,
+    tmp_path,
+    sitemap_candidate_factory,
+) -> None:
+    caplog.set_level(logging.INFO, logger="bookhound")
+    repositories = RepositorySet(initialize_database(tmp_path / "bookhound.sqlite3"))
+    query_plan = _query_plan("step logging")
+    candidate = sitemap_candidate_factory(
+        title="Step Logging Report",
+        url="https://example.org/step-logging.pdf",
+        query=query_plan.variants[0].query,
+    )
+
+    try:
+        query_id = repositories.begin_collection(query_plan)
+        summary = repositories.save_collection_step(
+            query_id,
+            _step(
+                query_plan=query_plan,
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                status="completed",
+                candidates=[candidate],
+            ),
+        )
+    finally:
+        repositories.close()
+
+    record = _single_record(caplog.records, "collect.step.persistence.completed")
+    assert summary.new == 1
+    assert record.levelno == logging.INFO
+    assert record.keyword == "step logging"
+    assert record.query_id == query_id
+    assert record.step_id > 0
+    assert record.query_variant_label == "quoted"
+    assert record.query == '"step logging"'
+    assert record.source == "sitemap"
+    assert record.discovery_method == "sitemap"
+    assert record.status == "completed"
+    assert record.candidate_count == 1
+    assert record.new == 1
+    assert record.updated == 0
+    assert record.duplicate == 0
+    assert record.error_count == 0
+    assert record.duration_ms >= 0
+
+
+@pytest.mark.revised
+def test_collect_incremental_logs_step_persistence_failed(
+    caplog,
+    tmp_path,
+    common_crawl_candidate_factory,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="bookhound")
+    repositories = RepositorySet(initialize_database(tmp_path / "bookhound.sqlite3"))
+    query_plan = _query_plan("step failure logging")
+    invalid_evidence = LicenseEvidence.model_construct(
+        source="common_crawl",
+        evidence_type="metadata",
+        value="invalid status",
+        suggested_status="invalid-license-status",
+        confidence=0.2,
+        collected_at=datetime(2026, 6, 7, 9, 0, tzinfo=timezone.utc),
+    )
+    candidate = common_crawl_candidate_factory(
+        title="Broken Evidence Result",
+        url="https://example.org/broken-evidence.pdf",
+        query=query_plan.variants[0].query,
+        metadata={
+            "license_evidence": [
+                {
+                    "evidence": invalid_evidence,
+                    "metadata": {"source_event": "invalid_fixture"},
+                }
+            ],
+        },
+    )
+
+    try:
+        query_id = repositories.begin_collection(query_plan)
+        with pytest.raises(sqlite3.IntegrityError):
+            repositories.save_collection_step(
+                query_id,
+                _step(
+                    query_plan=query_plan,
+                    source=SourceKind.COMMON_CRAWL,
+                    discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                    status="completed",
+                    candidates=[candidate],
+                ),
+            )
+    finally:
+        repositories.close()
+
+    record = _single_record(caplog.records, "collect.step.persistence.failed")
+    assert record.levelno == logging.ERROR
+    assert record.keyword == "step failure logging"
+    assert record.query_id == query_id
+    assert record.step_id > 0
+    assert record.query_variant_label == "quoted"
+    assert record.query == '"step failure logging"'
+    assert record.source == "common_crawl"
+    assert record.discovery_method == "public_index"
+    assert record.status == "completed"
+    assert record.candidate_count == 1
+    assert record.error_count == 0
+    assert record.duration_ms >= 0
+    assert "CHECK constraint failed" in record.error
+
+
 class FakeTransport:
     def __init__(self, outcomes: list[HttpResponse | Exception]) -> None:
         self.outcomes = list(outcomes)
@@ -350,6 +471,34 @@ class FakeClock:
 
 def _single_variant_query_planner() -> QueryPlanner:
     return QueryPlanner(QueryPlannerConfig(max_variants=1))
+
+
+def _query_plan(keyword: str) -> QueryPlan:
+    return QueryPlan(
+        keyword=keyword,
+        variants=[PlannedQueryVariant(label="quoted", query=f'"{keyword}"')],
+    )
+
+
+def _step(
+    *,
+    query_plan: QueryPlan,
+    source: SourceKind,
+    discovery_method: DiscoveryMethod,
+    status: str,
+    candidates=None,
+    errors=None,
+) -> DiscoveryStepResult:
+    return DiscoveryStepResult(
+        query_plan=query_plan,
+        variant=query_plan.variants[0],
+        source=source,
+        discovery_method=discovery_method,
+        status=status,
+        candidates=list(candidates or []),
+        errors=list(errors or []),
+        events=[],
+    )
 
 
 def _single_record(

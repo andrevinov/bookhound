@@ -91,6 +91,7 @@ class RepositorySet:
         query_id: int,
         step: DiscoveryStepResult,
     ) -> CollectSummary:
+        started_at = time.perf_counter()
         candidates = _unique_candidates_by_canonical_url(step.candidates)
         summary = CollectSummary(
             total=len(candidates),
@@ -98,11 +99,12 @@ class RepositorySet:
             updated=0,
             duplicate=0,
         )
+        step_id: int | None = None
 
         try:
             self.connection.execute("BEGIN")
             if step.status == "failed":
-                self.collection_steps.record_failed(
+                step_id = self.collection_steps.record_failed(
                     query_id=query_id,
                     variant_label=step.variant.label,
                     variant_query=step.variant.query,
@@ -150,17 +152,43 @@ class RepositorySet:
                     "event": "collect.step.persistence.failed",
                     "keyword": step.query_plan.keyword,
                     "query_id": query_id,
+                    "step_id": step_id,
                     "query_variant_label": step.variant.label,
+                    "query": step.variant.query,
                     "source": step.source.value,
                     "discovery_method": step.discovery_method.value,
                     "status": step.status,
                     "candidate_count": len(candidates),
+                    "new": summary.new,
+                    "updated": summary.updated,
+                    "duplicate": summary.duplicate,
                     "error_count": len(step.errors),
+                    "duration_ms": _duration_ms(started_at),
                     "error": str(error),
                 },
             )
             raise
 
+        logger.info(
+            "Collection step persistence completed.",
+            extra={
+                "event": "collect.step.persistence.completed",
+                "keyword": step.query_plan.keyword,
+                "query_id": query_id,
+                "step_id": step_id,
+                "query_variant_label": step.variant.label,
+                "query": step.variant.query,
+                "source": step.source.value,
+                "discovery_method": step.discovery_method.value,
+                "status": step.status,
+                "candidate_count": len(candidates),
+                "new": summary.new,
+                "updated": summary.updated,
+                "duplicate": summary.duplicate,
+                "error_count": len(step.errors),
+                "duration_ms": _duration_ms(started_at),
+            },
+        )
         return summary
 
     def finish_collection(

@@ -166,6 +166,8 @@ def collect(
                 repositories,
                 pipeline,
                 keyword,
+                context=context,
+                started_at=started_at,
             )
         finally:
             repositories.close()
@@ -626,38 +628,206 @@ def _save_incremental_collect_result(
     repositories: RepositorySet,
     pipeline: object,
     keyword: str,
+    *,
+    context: dict[str, object],
+    started_at: float,
 ) -> CollectSummary:
     summary = CollectSummary(total=0, new=0, updated=0, duplicate=0)
     query_id: int | None = None
+    run_logged = False
     query_plan = _pipeline_query_plan(pipeline, keyword)
     if query_plan is not None:
         query_id = repositories.begin_collection(query_plan)
+        _log_collect_run_started(context, query_id=query_id)
+        run_logged = True
 
     errors: list[str] = []
     events: list[dict[str, object]] = []
     seen_canonical_urls: set[str] = set()
-    for step in pipeline.iter_search(keyword):
-        if query_id is None:
-            query_id = repositories.begin_collection(step.query_plan)
-        filtered_step = _filter_seen_collection_candidates(
-            step,
-            seen_canonical_urls,
-        )
-        step_summary = repositories.save_collection_step(query_id, filtered_step)
-        summary = _add_collect_summaries(summary, step_summary)
-        errors.extend(f"{step.source.value}: {error}" for error in step.errors)
-        events.extend(step.events)
+    try:
+        for step in pipeline.iter_search(keyword):
+            step_started_at = time.perf_counter()
+            if query_id is None:
+                query_id = repositories.begin_collection(step.query_plan)
+            if not run_logged:
+                _log_collect_run_started(context, query_id=query_id)
+                run_logged = True
+            _log_collect_step_started(
+                context,
+                query_id=query_id,
+                step=step,
+            )
+            filtered_step = _filter_seen_collection_candidates(
+                step,
+                seen_canonical_urls,
+            )
+            step_summary = repositories.save_collection_step(query_id, filtered_step)
+            summary = _add_collect_summaries(summary, step_summary)
+            errors.extend(f"{step.source.value}: {error}" for error in step.errors)
+            events.extend(step.events)
+            _log_collect_step_finished(
+                context,
+                query_id=query_id,
+                step=filtered_step,
+                summary=step_summary,
+                started_at=step_started_at,
+            )
 
-    if query_id is not None:
-        repositories.finish_collection(
+        if query_id is not None:
+            repositories.finish_collection(
+                query_id=query_id,
+                keyword=keyword,
+                summary=summary,
+                errors=errors,
+                events=events,
+            )
+            _log_collect_run_completed(
+                context,
+                query_id=query_id,
+                summary=summary,
+                error_count=len(errors),
+                started_at=started_at,
+            )
+    except Exception as error:
+        _log_collect_run_failed(
+            context,
+            error,
+            started_at,
             query_id=query_id,
-            keyword=keyword,
             summary=summary,
-            errors=errors,
-            events=events,
+            error_count=len(errors),
         )
+        raise
 
     return summary
+
+
+def _log_collect_run_started(
+    context: dict[str, object],
+    *,
+    query_id: int,
+) -> None:
+    logger.info(
+        "Collection run started.",
+        extra={
+            **context,
+            "event": "collect.run.started",
+            "query_id": query_id,
+        },
+    )
+
+
+def _log_collect_run_completed(
+    context: dict[str, object],
+    *,
+    query_id: int,
+    summary: CollectSummary,
+    error_count: int,
+    started_at: float,
+) -> None:
+    logger.info(
+        "Collection run completed.",
+        extra={
+            **context,
+            "event": "collect.run.completed",
+            "query_id": query_id,
+            "total": summary.total,
+            "new": summary.new,
+            "updated": summary.updated,
+            "duplicate": summary.duplicate,
+            "error_count": error_count,
+            "duration_ms": _duration_ms(started_at),
+        },
+    )
+
+
+def _log_collect_run_failed(
+    context: dict[str, object],
+    error: Exception,
+    started_at: float,
+    *,
+    query_id: int | None,
+    summary: CollectSummary,
+    error_count: int,
+) -> None:
+    logger.error(
+        "Collection run failed.",
+        exc_info=True,
+        extra={
+            **context,
+            "event": "collect.run.failed",
+            "query_id": query_id,
+            "total": summary.total,
+            "new": summary.new,
+            "updated": summary.updated,
+            "duplicate": summary.duplicate,
+            "error_count": error_count,
+            "duration_ms": _duration_ms(started_at),
+            "error": str(error),
+            "error_type": type(error).__name__,
+        },
+    )
+
+
+def _log_collect_step_started(
+    context: dict[str, object],
+    *,
+    query_id: int,
+    step: DiscoveryStepResult,
+) -> None:
+    logger.info(
+        "Collection step started.",
+        extra={
+            **context,
+            "event": "collect.step.started",
+            **_collect_step_log_metadata(query_id=query_id, step=step),
+        },
+    )
+
+
+def _log_collect_step_finished(
+    context: dict[str, object],
+    *,
+    query_id: int,
+    step: DiscoveryStepResult,
+    summary: CollectSummary,
+    started_at: float,
+) -> None:
+    metadata = {
+        **context,
+        "event": (
+            "collect.step.failed"
+            if step.status == "failed"
+            else "collect.step.completed"
+        ),
+        **_collect_step_log_metadata(query_id=query_id, step=step),
+        "new": summary.new,
+        "updated": summary.updated,
+        "duplicate": summary.duplicate,
+        "duration_ms": _duration_ms(started_at),
+    }
+    if step.status == "failed":
+        logger.warning("Collection step failed.", extra=metadata)
+        return
+
+    logger.info("Collection step completed.", extra=metadata)
+
+
+def _collect_step_log_metadata(
+    *,
+    query_id: int,
+    step: DiscoveryStepResult,
+) -> dict[str, object]:
+    return {
+        "query_id": query_id,
+        "query_variant_label": step.variant.label,
+        "query": step.variant.query,
+        "source": step.source.value,
+        "discovery_method": step.discovery_method.value,
+        "status": step.status,
+        "candidate_count": len(step.candidates),
+        "error_count": len(step.errors),
+    }
 
 
 def _filter_seen_collection_candidates(
