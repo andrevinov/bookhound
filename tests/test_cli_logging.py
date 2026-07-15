@@ -284,6 +284,11 @@ def test_unexpected_command_failure_logs_error_type_and_traceback(
             assert keyword == "runtime failure"
             raise RuntimeError("simulated pipeline failure")
 
+        def iter_search(self, keyword: str):
+            assert keyword == "runtime failure"
+            raise RuntimeError("simulated pipeline failure")
+            yield
+
     monkeypatch.setattr(
         cli,
         "build_search_pipeline",

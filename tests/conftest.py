@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from bookhound.database import initialize_database
-from bookhound.discovery_pipeline import DiscoveryPipelineResult
+from bookhound.discovery_pipeline import DiscoveryPipelineResult, DiscoveryStepResult
 from bookhound.http_client import HttpResponse
 from bookhound.jobs_daemon_export import DaemonConfig
 from bookhound.models import (
@@ -368,6 +368,39 @@ class RecordingPipeline:
             events=self.events,
         )
 
+    def iter_search(self, keyword: str):
+        self.searched_keywords.append(keyword)
+        result = discovery_result(
+            keyword=keyword,
+            candidates=self.candidates,
+            errors=self.errors,
+            events=self.events,
+        )
+        if not result.candidates and not result.errors and not result.events:
+            return
+
+        first_candidate = result.candidates[0] if result.candidates else None
+        yield DiscoveryStepResult(
+            query_plan=result.query_plan,
+            variant=result.query_plan.variants[0],
+            source=(
+                first_candidate.source
+                if first_candidate is not None
+                else SourceKind.SITEMAP
+            ),
+            discovery_method=(
+                first_candidate.discovery_method
+                if first_candidate is not None
+                else DiscoveryMethod.SITEMAP
+            ),
+            status=(
+                "failed" if result.errors and not result.candidates else "completed"
+            ),
+            candidates=result.candidates,
+            errors=result.errors,
+            events=result.events,
+        )
+
 
 class FailingPipeline:
     def __init__(self, message: str = "Unexpected discovery pipeline call.") -> None:
@@ -375,6 +408,10 @@ class FailingPipeline:
 
     def search(self, keyword: str) -> DiscoveryPipelineResult:
         raise AssertionError(self.message)
+
+    def iter_search(self, keyword: str):
+        raise AssertionError(self.message)
+        yield
 
 
 def discovery_result(
