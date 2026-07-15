@@ -1,7 +1,12 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+import logging
 import time
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -106,6 +111,15 @@ class BookhoundHttpClient:
         cache: bool = False,
     ) -> HttpResponse:
         if cache and url in self._cache:
+            logger.debug(
+                "HTTP cache hit.",
+                extra={
+                    "event": "http.cache_hit",
+                    "method": "GET",
+                    "url": _sanitize_url(url),
+                    "cache": True,
+                },
+            )
             return self._cache[url]
 
         request = HttpRequest(
@@ -130,15 +144,62 @@ class BookhoundHttpClient:
         attempts = self.config.max_retries + 1
 
         for attempt_index in range(attempts):
+            attempt = attempt_index + 1
             self._apply_rate_limit(rate_limit_key)
+            logger.debug(
+                "HTTP request started.",
+                extra={
+                    "event": "http.request_started",
+                    "method": request.method,
+                    "url": _sanitize_url(request.url),
+                    "attempt": attempt,
+                    "total_attempts": attempts,
+                    "rate_limit_key": rate_limit_key,
+                },
+            )
             try:
                 response = self.transport.request(request)
             except TimeoutError as error:
+                logger.warning(
+                    "HTTP request timed out.",
+                    extra={
+                        "event": "http.timeout",
+                        "method": request.method,
+                        "url": _sanitize_url(request.url),
+                        "attempt": attempt,
+                        "total_attempts": attempts,
+                        "rate_limit_key": rate_limit_key,
+                    },
+                )
                 raise HttpTimeoutError(request.url) from error
 
+            logger.debug(
+                "HTTP response received.",
+                extra={
+                    "event": "http.response",
+                    "method": request.method,
+                    "url": _sanitize_url(request.url),
+                    "status_code": response.status_code,
+                    "attempt": attempt,
+                    "total_attempts": attempts,
+                    "rate_limit_key": rate_limit_key,
+                },
+            )
             if not _is_transient_status(response.status_code) or attempt_index == attempts - 1:
                 return response
 
+            logger.warning(
+                "HTTP request will be retried.",
+                extra={
+                    "event": "http.retry",
+                    "method": request.method,
+                    "url": _sanitize_url(request.url),
+                    "status_code": response.status_code,
+                    "attempt": attempt,
+                    "total_attempts": attempts,
+                    "rate_limit_key": rate_limit_key,
+                },
+            )
             self.sleep(self.config.retry_backoff_seconds)
 
         raise RuntimeError("HTTP retry loop exited unexpectedly.")
@@ -159,6 +220,14 @@ class BookhoundHttpClient:
             elapsed = now - last_request_at
             wait_seconds = minimum_interval - elapsed
             if wait_seconds > 0:
+                logger.debug(
+                    "HTTP rate limit applied.",
+                    extra={
+                        "event": "http.rate_limited",
+                        "rate_limit_key": rate_limit_key,
+                        "wait_seconds": wait_seconds,
+                    },
+                )
                 self.sleep(wait_seconds)
                 now = self.clock()
 
@@ -176,3 +245,8 @@ def _is_transient_status(status_code: int) -> bool:
 
 def _is_cacheable_response(response: HttpResponse) -> bool:
     return 200 <= response.status_code < 300
+
+
+def _sanitize_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))

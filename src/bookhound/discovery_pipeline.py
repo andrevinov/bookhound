@@ -1,10 +1,15 @@
 from dataclasses import dataclass, field
+import logging
+import time
 from typing import Protocol
 
 from bookhound.models import RawCandidate
 from bookhound.query_planner import PlannedQueryVariant, QueryPlan, QueryPlanner
 from bookhound.sources import SourceAdapter, run_source_search
 from bookhound.url_normalization import canonicalize_url
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -37,14 +42,29 @@ class DiscoveryPipeline:
         self.query_planner = query_planner or QueryPlanner()
 
     def search(self, keyword: str) -> DiscoveryPipelineResult:
+        started_at = time.perf_counter()
         query_plan = self.query_planner.plan_queries(keyword)
         candidates_by_canonical_url: dict[str, RawCandidate] = {}
         errors: list[str] = []
         events: list[dict[str, object]] = []
+        raw_candidate_count = 0
 
         for variant in query_plan.variants:
             for source in self.sources:
+                source_started_at = time.perf_counter()
+                logger.debug(
+                    "Source search started.",
+                    extra={
+                        "event": "discovery.source.started",
+                        "keyword": query_plan.keyword,
+                        "query": variant.query,
+                        "query_variant_label": variant.label,
+                        "source": source.source_name.value,
+                        "discovery_method": source.discovery_method.value,
+                    },
+                )
                 source_result = run_source_search(source, query=variant.query)
+                raw_candidate_count += len(source_result.candidates)
                 errors.extend(
                     f"{source_result.source.value}: {error}"
                     for error in source_result.errors
@@ -56,24 +76,56 @@ class DiscoveryPipeline:
                         candidate,
                         variant,
                     )
+                logger.debug(
+                    "Source search completed.",
+                    extra={
+                        "event": "discovery.source.completed",
+                        "keyword": query_plan.keyword,
+                        "query": variant.query,
+                        "query_variant_label": variant.label,
+                        "source": source_result.source.value,
+                        "discovery_method": source_result.discovery_method.value,
+                        "candidate_count": len(source_result.candidates),
+                        "error_count": len(source_result.errors),
+                        "event_count": len(source_result.events),
+                        "duration_ms": _duration_ms(source_started_at),
+                    },
+                )
 
             if self.link_expander is not None:
-                for candidate in self.link_expander.expand(
+                expanded_candidates = self.link_expander.expand(
                     list(candidates_by_canonical_url.values()),
                     query=variant.query,
-                ):
+                )
+                raw_candidate_count += len(expanded_candidates)
+                for candidate in expanded_candidates:
                     _add_candidate(
                         candidates_by_canonical_url,
                         candidate,
                         variant,
                     )
 
+        candidates = sorted(
+            candidates_by_canonical_url.values(),
+            key=_candidate_sort_key,
+        )
+        logger.info(
+            "Discovery pipeline completed.",
+            extra={
+                "event": "discovery.pipeline.completed",
+                "keyword": query_plan.keyword,
+                "variant_count": len(query_plan.variants),
+                "source_count": len(self.sources),
+                "raw_candidate_count": raw_candidate_count,
+                "candidate_count": len(candidates),
+                "error_count": len(errors),
+                "event_count": len(events),
+                "duration_ms": _duration_ms(started_at),
+            },
+        )
         return DiscoveryPipelineResult(
             query_plan=query_plan,
-            candidates=sorted(
-                candidates_by_canonical_url.values(),
-                key=_candidate_sort_key,
-            ),
+            candidates=candidates,
             errors=errors,
             events=events,
         )
@@ -153,3 +205,7 @@ def _source_occurrence(
         "query_variant_label": variant.label,
         "query": candidate.query,
     }
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, round((time.perf_counter() - started_at) * 1000))

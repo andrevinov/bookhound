@@ -1,10 +1,14 @@
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 import json
+import logging
 import xml.etree.ElementTree as ET
 
 from bookhound.http_client import HttpClientError
 from bookhound.models import DiscoveryMethod, RawCandidate, SourceKind, SourceResult
+
+
+logger = logging.getLogger(__name__)
 
 
 class SourceError(Exception):
@@ -110,6 +114,16 @@ class DisabledSourceAdapter(SourceAdapter):
 def run_source_search(adapter: SourceAdapter, query: str) -> SourceResult:
     if not adapter.enabled:
         reason = (adapter.disabled_reason or "No reason provided").rstrip(".")
+        logger.warning(
+            "Source is disabled.",
+            extra={
+                "event": "source.disabled",
+                "source": adapter.source_name.value,
+                "discovery_method": adapter.discovery_method.value,
+                "query": query,
+                "reason": reason,
+            },
+        )
         return _empty_result(
             adapter,
             errors=[f"Source {adapter.source_name.value} is disabled: {reason}."],
@@ -118,6 +132,17 @@ def run_source_search(adapter: SourceAdapter, query: str) -> SourceResult:
     try:
         candidates = adapter.search(query)
     except SourceError as error:
+        logger.warning(
+            "Source search failed.",
+            extra={
+                "event": "source.search_failed",
+                "source": adapter.source_name.value,
+                "discovery_method": adapter.discovery_method.value,
+                "query": query,
+                "error_kind": error.error_kind,
+                "error": error.as_result_error(),
+            },
+        )
         return _empty_result(
             adapter,
             errors=[error.as_result_error()],
@@ -132,6 +157,17 @@ def run_source_search(adapter: SourceAdapter, query: str) -> SourceResult:
         source_error = SourceAvailabilityError(
             adapter.source_name,
             _external_integration_error_message(error),
+        )
+        logger.warning(
+            "Source search failed.",
+            extra={
+                "event": "source.search_failed",
+                "source": adapter.source_name.value,
+                "discovery_method": adapter.discovery_method.value,
+                "query": query,
+                "error_kind": source_error.error_kind,
+                "error": source_error.as_result_error(),
+            },
         )
         return _empty_result(
             adapter,
