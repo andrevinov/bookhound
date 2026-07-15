@@ -624,6 +624,199 @@ def test_pipeline_preserves_operational_events_from_sources() -> None:
     ]
 
 
+@pytest.mark.revised
+def test_pipeline_iter_search_emits_step_per_variant_and_source(
+    raw_candidate_factory,
+) -> None:
+    pipeline = DiscoveryPipeline(
+        sources=[
+            FakeSourceAdapter(
+                source=SourceKind.GOOGLE,
+                discovery_method=DiscoveryMethod.API,
+                candidates=[
+                    raw_candidate_factory(
+                        title="Google Result",
+                        url="https://google.example/report.pdf",
+                        source=SourceKind.GOOGLE,
+                        discovery_method=DiscoveryMethod.API,
+                        query="old query",
+                        score=0.80,
+                    )
+                ],
+            ),
+            EventedFakeSourceAdapter(
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                events=[
+                    {
+                        "event_type": "sitemap.frontier_rejected",
+                        "message": "Rejected sitemap URL outside the configured frontier.",
+                        "metadata": {
+                            "url": "https://outside.example/sitemap.xml",
+                        },
+                    }
+                ],
+            ),
+        ],
+        query_planner=QueryPlanner(QueryPlannerConfig(max_variants=1)),
+    )
+
+    steps = list(pipeline.iter_search("machine learning"))
+
+    assert len(steps) == 2
+    assert all(step.query_plan.keyword == "machine learning" for step in steps)
+    assert [step.variant.label for step in steps] == ["quoted", "quoted"]
+    assert [step.variant.query for step in steps] == [
+        '"machine learning"',
+        '"machine learning"',
+    ]
+    assert [step.source for step in steps] == [
+        SourceKind.GOOGLE,
+        SourceKind.SITEMAP,
+    ]
+    assert [step.discovery_method for step in steps] == [
+        DiscoveryMethod.API,
+        DiscoveryMethod.SITEMAP,
+    ]
+    assert [step.status for step in steps] == ["completed", "completed"]
+    assert [candidate.url for candidate in steps[0].candidates] == [
+        "https://google.example/report.pdf"
+    ]
+    assert steps[0].candidates[0].query == '"machine learning"'
+    assert steps[0].errors == []
+    assert steps[0].events == []
+    assert steps[1].candidates == []
+    assert steps[1].errors == []
+    assert steps[1].events == [
+        {
+            "source": "sitemap",
+            "event_type": "sitemap.frontier_rejected",
+            "message": "Rejected sitemap URL outside the configured frontier.",
+            "metadata": {
+                "url": "https://outside.example/sitemap.xml",
+            },
+        }
+    ]
+
+
+@pytest.mark.revised
+def test_pipeline_search_matches_incremental_steps_final_result(
+    raw_candidate_factory,
+) -> None:
+    pipeline = DiscoveryPipeline(
+        sources=[
+            FakeSourceAdapter(
+                source=SourceKind.COMMON_CRAWL,
+                discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                candidates=[
+                    raw_candidate_factory(
+                        title="Older Metadata",
+                        url="https://Example.org/reports/paper.pdf?utm_source=newsletter#page=1",
+                        source=SourceKind.COMMON_CRAWL,
+                        discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                        query="old query",
+                        score=0.60,
+                    )
+                ],
+            ),
+            FakeSourceAdapter(
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                candidates=[
+                    raw_candidate_factory(
+                        title="Better Metadata",
+                        url="https://example.org/reports/paper.pdf",
+                        source=SourceKind.SITEMAP,
+                        discovery_method=DiscoveryMethod.SITEMAP,
+                        query="old query",
+                        score=0.90,
+                    )
+                ],
+            ),
+        ],
+        query_planner=QueryPlanner(QueryPlannerConfig(max_variants=1)),
+    )
+
+    steps = list(pipeline.iter_search("metadata"))
+    result = pipeline.search("metadata")
+
+    assert [len(step.candidates) for step in steps] == [1, 1]
+    assert [step.status for step in steps] == ["completed", "completed"]
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate.title == "Better Metadata"
+    assert candidate.score == 0.90
+    assert candidate.metadata["canonical_url"] == "https://example.org/reports/paper.pdf"
+    assert candidate.metadata["merged_count"] == 2
+    assert candidate.metadata["source_occurrences"] == [
+        {
+            "source": "common_crawl",
+            "discovery_method": "public_index",
+            "query_variant_label": "quoted",
+            "query": '"metadata"',
+        },
+        {
+            "source": "sitemap",
+            "discovery_method": "sitemap",
+            "query_variant_label": "quoted",
+            "query": '"metadata"',
+        },
+    ]
+
+
+@pytest.mark.revised
+def test_pipeline_iter_search_represents_recoverable_source_failure_as_failed_step(
+    raw_candidate_factory,
+) -> None:
+    pipeline = DiscoveryPipeline(
+        sources=[
+            FakeSourceAdapter(
+                source=SourceKind.COMMON_CRAWL,
+                discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                candidates=[],
+                error=SourceAvailabilityError(
+                    SourceKind.COMMON_CRAWL,
+                    "Index unavailable.",
+                ),
+            ),
+            FakeSourceAdapter(
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                candidates=[
+                    raw_candidate_factory(
+                        title="Sitemap Result",
+                        url="https://example.org/report.pdf",
+                        source=SourceKind.SITEMAP,
+                        discovery_method=DiscoveryMethod.SITEMAP,
+                        query="old query",
+                        score=0.70,
+                    )
+                ],
+            ),
+        ],
+        query_planner=QueryPlanner(QueryPlannerConfig(max_variants=1)),
+    )
+
+    steps = list(pipeline.iter_search("renewable energy"))
+
+    assert len(steps) == 2
+    failed_step, completed_step = steps
+    assert failed_step.source is SourceKind.COMMON_CRAWL
+    assert failed_step.discovery_method is DiscoveryMethod.PUBLIC_INDEX
+    assert failed_step.status == "failed"
+    assert failed_step.candidates == []
+    assert failed_step.errors == ["availability: Index unavailable."]
+    assert failed_step.events == []
+
+    assert completed_step.source is SourceKind.SITEMAP
+    assert completed_step.discovery_method is DiscoveryMethod.SITEMAP
+    assert completed_step.status == "completed"
+    assert [candidate.title for candidate in completed_step.candidates] == [
+        "Sitemap Result"
+    ]
+    assert completed_step.errors == []
+
+
 class EventedFakeSourceAdapter(FakeSourceAdapter):
     def __init__(
         self,
