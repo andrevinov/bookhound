@@ -4,11 +4,18 @@ import sqlite3
 
 from typer.testing import CliRunner
 
+import pytest
+
 import bookhound.cli as cli
 from bookhound.config import load_settings
-from bookhound.models import SourceKind
+from bookhound.discovery_pipeline import DiscoveryPipeline
+from bookhound.link_expansion import LinkExpansionAdapter, LinkExpansionConfig
+from bookhound.models import DiscoveryMethod, SourceKind
+from bookhound.query_planner import QueryPlanner, QueryPlannerConfig
+from bookhound.sources import FakeSourceAdapter
 
 
+@pytest.mark.revised
 def test_configured_runtime_pipeline_has_expected_sources(
     tmp_path: Path,
     write_sitemap_runtime_config_factory,
@@ -82,6 +89,90 @@ def test_collect_smoke_creates_database_and_saves_fixture_candidate(
     }
     assert document[0] == "operational-smoke.pdf"
     assert json.loads(document[1])["lastmod"] == "2026-07-04"
+
+
+def test_collect_persists_expanded_links_from_non_utf8_html_without_failure_log(
+    tmp_path: Path,
+    monkeypatch,
+    recording_http_client_factory,
+    html_response_factory,
+    sitemap_candidate_factory,
+) -> None:
+    database_path = tmp_path / "bookhound.sqlite3"
+    landing_page = sitemap_candidate_factory(
+        title="Legacy Encoded Landing Page",
+        url="https://example.org/reports/legacy",
+        query="original query",
+        score=0.7,
+    )
+    html = b"""
+    <html>
+      <body>
+        <p>Legacy text byte: \xf4</p>
+        <a href="/reports/legacy.pdf">Legacy PDF</a>
+      </body>
+    </html>
+    """
+    pipeline = DiscoveryPipeline(
+        sources=[
+            FakeSourceAdapter(
+                SourceKind.SITEMAP,
+                DiscoveryMethod.SITEMAP,
+                [landing_page],
+            )
+        ],
+        link_expander=LinkExpansionAdapter(
+            http_client=recording_http_client_factory.from_mapping(
+                {
+                    "https://example.org/reports/legacy": html_response_factory(
+                        url="https://example.org/reports/legacy",
+                        content=html,
+                        headers={"content-type": "text/html; charset=windows-1252"},
+                    )
+                }
+            ),
+            config=LinkExpansionConfig(max_depth=1, max_candidates=10),
+        ),
+        query_planner=QueryPlanner(QueryPlannerConfig(max_variants=1)),
+    )
+    monkeypatch.setattr(cli, "build_search_pipeline", lambda: pipeline, raising=False)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["collect", "legacy encoding"],
+        env={
+            "BOOKHOUND_DATABASE_PATH": str(database_path),
+            "BOOKHOUND_LOG_LEVEL": "INFO",
+            "BOOKHOUND_LOG_FORMAT": "json",
+            "BOOKHOUND_LOG_DESTINATION": "stderr",
+            "BOOKHOUND_LOG_FILE": None,
+        },
+    )
+
+    assert result.exit_code == 0
+    logs = [
+        json.loads(line)
+        for line in result.stderr.splitlines()
+        if line.strip()
+    ]
+    assert not any(log.get("event") == "collect.failed" for log in logs)
+    assert any(log.get("event") == "collect.completed" for log in logs)
+
+    with sqlite3.connect(database_path) as connection:
+        document_urls = connection.execute(
+            """
+            SELECT document_urls.url, sources.name, document_urls.discovery_method
+            FROM document_urls
+            JOIN sources ON sources.id = document_urls.source_id
+            ORDER BY document_urls.url
+            """
+        ).fetchall()
+
+    assert (
+        "https://example.org/reports/legacy.pdf",
+        "link_expansion",
+        "link_expansion",
+    ) in document_urls
 
 
 def test_export_smoke_writes_jsonl_after_collect(
