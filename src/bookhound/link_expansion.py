@@ -9,6 +9,7 @@ from bookhound.html_links import HtmlLink, parse_links
 from bookhound.http_client import BookhoundHttpClient, HttpClientConfig, HttpClientProtocol
 from bookhound.models import DiscoveryMethod, RawCandidate, SourceKind
 from bookhound.sources import SourceAdapter
+from bookhound.text_decoding import decode_http_text
 from bookhound.url_normalization import (
     canonicalize_url_or_raw,
     safe_is_direct_pdf_url,
@@ -94,7 +95,7 @@ class LinkExpansionAdapter(SourceAdapter):
                 continue
             visited_pages.add(canonical_page_url)
 
-            for link in parse_links(response.content.decode("utf-8")):
+            for link in parse_links(decode_http_text(response.content, response.headers)):
                 absolute_url = urljoin(page_url, link.href)
                 canonical_url = canonicalize_url_or_raw(absolute_url)
                 if canonical_url in seen_urls:
