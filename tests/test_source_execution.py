@@ -700,6 +700,72 @@ def test_pipeline_iter_search_emits_step_per_variant_and_source(
 
 
 @pytest.mark.revised
+def test_pipeline_iter_search_emits_link_expansion_step_after_variant_sources(
+    raw_candidate_factory,
+) -> None:
+    landing_candidate = raw_candidate_factory(
+        title="Landing Page",
+        url="https://example.org/reports/landing",
+        source=SourceKind.SITEMAP,
+        discovery_method=DiscoveryMethod.SITEMAP,
+        query="old query",
+        score=0.70,
+    )
+    expanded_candidate = raw_candidate_factory(
+        title="Expanded PDF",
+        url="https://example.org/reports/expanded.pdf",
+        source=SourceKind.LINK_EXPANSION,
+        discovery_method=DiscoveryMethod.LINK_EXPANSION,
+        query='"machine learning"',
+        score=0.85,
+    )
+    link_expander = RecordingLinkExpander([expanded_candidate])
+    pipeline = DiscoveryPipeline(
+        sources=[
+            FakeSourceAdapter(
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                candidates=[landing_candidate],
+            ),
+            FakeSourceAdapter(
+                source=SourceKind.COMMON_CRAWL,
+                discovery_method=DiscoveryMethod.PUBLIC_INDEX,
+                candidates=[],
+            ),
+        ],
+        link_expander=link_expander,
+        query_planner=QueryPlanner(QueryPlannerConfig(max_variants=1)),
+    )
+
+    steps = list(pipeline.iter_search("machine learning"))
+
+    assert [step.source for step in steps] == [
+        SourceKind.SITEMAP,
+        SourceKind.COMMON_CRAWL,
+        SourceKind.LINK_EXPANSION,
+    ]
+    assert [step.discovery_method for step in steps] == [
+        DiscoveryMethod.SITEMAP,
+        DiscoveryMethod.PUBLIC_INDEX,
+        DiscoveryMethod.LINK_EXPANSION,
+    ]
+    assert [step.status for step in steps] == [
+        "completed",
+        "completed",
+        "completed",
+    ]
+    assert link_expander.calls == [
+        {
+            "query": '"machine learning"',
+            "candidate_urls": ["https://example.org/reports/landing"],
+        }
+    ]
+    assert [candidate.url for candidate in steps[2].candidates] == [
+        "https://example.org/reports/expanded.pdf"
+    ]
+
+
+@pytest.mark.revised
 def test_pipeline_search_matches_incremental_steps_final_result(
     raw_candidate_factory,
 ) -> None:
@@ -836,3 +902,25 @@ class EventedFakeSourceAdapter(FakeSourceAdapter):
     def search(self, query: str) -> list[RawCandidate]:
         self.events = list(self._events)
         return super().search(query)
+
+
+class RecordingLinkExpander:
+    def __init__(self, candidates: list[RawCandidate]) -> None:
+        self.candidates = candidates
+        self.calls: list[dict[str, object]] = []
+
+    def expand(
+        self,
+        existing_candidates: list[RawCandidate],
+        *,
+        query: str,
+    ) -> list[RawCandidate]:
+        self.calls.append(
+            {
+                "query": query,
+                "candidate_urls": [
+                    candidate.url for candidate in existing_candidates
+                ],
+            }
+        )
+        return self.candidates

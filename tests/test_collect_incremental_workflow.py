@@ -7,9 +7,15 @@ from typer.testing import CliRunner
 import pytest
 
 import bookhound.cli as cli
-from bookhound.discovery_pipeline import DiscoveryStepResult
+from bookhound.discovery_pipeline import DiscoveryPipeline, DiscoveryStepResult
 from bookhound.models import DiscoveryMethod, RawCandidate, SourceKind
-from bookhound.query_planner import PlannedQueryVariant, QueryPlan
+from bookhound.query_planner import (
+    PlannedQueryVariant,
+    QueryPlan,
+    QueryPlanner,
+    QueryPlannerConfig,
+)
+from bookhound.sources import FakeSourceAdapter
 
 
 @pytest.mark.revised
@@ -189,6 +195,157 @@ def test_collect_accumulates_summary_from_incremental_steps(
     ]
 
 
+@pytest.mark.revised
+def test_collect_persists_link_expansion_step_as_own_collection_step(
+    tmp_path: Path,
+    monkeypatch,
+    sitemap_candidate_factory,
+    raw_candidate_factory,
+) -> None:
+    database_path = tmp_path / "bookhound.sqlite3"
+    landing_candidate = sitemap_candidate_factory(
+        title="Landing Page",
+        url="https://example.org/reports/landing",
+        query='"expanded links"',
+    )
+    expanded_candidate = raw_candidate_factory(
+        title="Expanded PDF",
+        url="https://example.org/reports/expanded.pdf",
+        source=SourceKind.LINK_EXPANSION,
+        discovery_method=DiscoveryMethod.LINK_EXPANSION,
+        query='"expanded links"',
+        score=0.88,
+    )
+    pipeline = DiscoveryPipeline(
+        sources=[
+            FakeSourceAdapter(
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                candidates=[landing_candidate],
+            )
+        ],
+        link_expander=RecordingLinkExpander([expanded_candidate]),
+        query_planner=QueryPlanner(QueryPlannerConfig(max_variants=1)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_search_pipeline",
+        lambda: pipeline,
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["collect", "expanded links"],
+        env={"BOOKHOUND_DATABASE_PATH": str(database_path)},
+    )
+
+    assert result.exit_code == 0
+    with sqlite3.connect(database_path) as connection:
+        steps = connection.execute(
+            """
+            SELECT source, discovery_method, status, candidate_count
+            FROM collection_steps
+            ORDER BY id
+            """
+        ).fetchall()
+        expanded_url = connection.execute(
+            """
+            SELECT url, canonical_url, url_type, discovery_method
+            FROM document_urls
+            WHERE canonical_url = ?
+            """,
+            ("https://example.org/reports/expanded.pdf",),
+        ).fetchone()
+
+    assert steps == [
+        ("sitemap", "sitemap", "completed", 1),
+        ("link_expansion", "link_expansion", "completed", 1),
+    ]
+    assert expanded_url == (
+        "https://example.org/reports/expanded.pdf",
+        "https://example.org/reports/expanded.pdf",
+        "pdf",
+        "link_expansion",
+    )
+
+
+@pytest.mark.revised
+def test_link_expansion_failure_does_not_delete_source_steps(
+    tmp_path: Path,
+    monkeypatch,
+    sitemap_candidate_factory,
+) -> None:
+    database_path = tmp_path / "bookhound.sqlite3"
+    pipeline = DiscoveryPipeline(
+        sources=[
+            FakeSourceAdapter(
+                source=SourceKind.SITEMAP,
+                discovery_method=DiscoveryMethod.SITEMAP,
+                candidates=[
+                    sitemap_candidate_factory(
+                        title="Persisted Landing Page",
+                        url="https://example.org/reports/landing",
+                        query='"link failure"',
+                    )
+                ],
+            )
+        ],
+        link_expander=FailingLinkExpander(
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        ),
+        query_planner=QueryPlanner(QueryPlannerConfig(max_variants=1)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_search_pipeline",
+        lambda: pipeline,
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["collect", "link failure"],
+        env={"BOOKHOUND_DATABASE_PATH": str(database_path)},
+    )
+
+    assert result.exit_code == 0
+    with sqlite3.connect(database_path) as connection:
+        steps = connection.execute(
+            """
+            SELECT
+                source,
+                discovery_method,
+                status,
+                candidate_count,
+                error_count,
+                errors_json
+            FROM collection_steps
+            ORDER BY id
+            """
+        ).fetchall()
+        persisted_url_count = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM document_urls
+            WHERE canonical_url = ?
+            """,
+            ("https://example.org/reports/landing",),
+        ).fetchone()
+
+    assert len(steps) == 2
+    assert steps[0] == ("sitemap", "sitemap", "completed", 1, 0, "[]")
+    assert steps[1][:5] == (
+        "link_expansion",
+        "link_expansion",
+        "failed",
+        0,
+        1,
+    )
+    assert "utf-8" in json.loads(steps[1][5])[0]
+    assert persisted_url_count == (1,)
+
+
 class StaticIncrementalPipeline:
     def __init__(self, steps: Iterable[DiscoveryStepResult]) -> None:
         self.steps = list(steps)
@@ -232,6 +389,32 @@ class CrashingIncrementalPipeline(StaticIncrementalPipeline):
     def iter_search(self, keyword: str):
         self.iterated_keywords.append(keyword)
         yield from self.steps
+        raise self.error
+
+
+class RecordingLinkExpander:
+    def __init__(self, candidates: Iterable[RawCandidate]) -> None:
+        self.candidates = list(candidates)
+
+    def expand(
+        self,
+        existing_candidates: list[RawCandidate],
+        *,
+        query: str,
+    ) -> list[RawCandidate]:
+        return self.candidates
+
+
+class FailingLinkExpander:
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    def expand(
+        self,
+        existing_candidates: list[RawCandidate],
+        *,
+        query: str,
+    ) -> list[RawCandidate]:
         raise self.error
 
 
