@@ -13,4 +13,5 @@ services:
       - ./.local/bookhound.toml:/config/bookhound.toml:ro
     environment:
       PYTHONUNBUFFERED: "1"
+      BOOKHOUND_LOG_LEVEL: "DEBUG"
     command: bash
