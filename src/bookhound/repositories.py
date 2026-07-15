@@ -324,6 +324,11 @@ class RepositorySet:
         source_id = self.sources.upsert(candidate.source, commit=False)
 
         if existing_document_url_id is not None:
+            self.document_urls.merge_source_occurrence(
+                existing_document_url_id,
+                _source_occurrence(candidate, collection_query=collection_query),
+                commit=False,
+            )
             return _increment_summary(summary, duplicate=1)
 
         document_id = self.documents.upsert(document, commit=False)
@@ -738,6 +743,44 @@ class DocumentUrlRepository:
             (canonical_url,),
         ).fetchone()
         return int(row[0]) if row is not None else None
+
+    def merge_source_occurrence(
+        self,
+        document_url_id: int,
+        occurrence: dict[str, str],
+        *,
+        commit: bool = True,
+    ) -> None:
+        row = self.connection.execute(
+            """
+            SELECT
+                document_urls.metadata_json,
+                sources.name,
+                document_urls.discovery_method
+            FROM document_urls
+            JOIN sources ON sources.id = document_urls.source_id
+            WHERE document_urls.id = ?
+            """,
+            (document_url_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Expected document URL was not found.")
+
+        merged_metadata = _merge_document_url_source_occurrence(
+            existing_json=str(row[0]),
+            existing_source=str(row[1]),
+            existing_discovery_method=str(row[2]),
+            new_occurrence=occurrence,
+        )
+        self.connection.execute(
+            """
+            UPDATE document_urls
+            SET metadata_json = ?
+            WHERE id = ?
+            """,
+            (_to_json(merged_metadata), document_url_id),
+        )
+        _commit_if_requested(self.connection, commit)
 
     def upsert(
         self,
@@ -1373,6 +1416,23 @@ def _candidate_document_url_metadata(
     }
 
 
+def _source_occurrence(
+    candidate: RawCandidate,
+    *,
+    collection_query: str,
+) -> dict[str, str]:
+    query_variant_label = candidate.metadata.get("query_variant_label")
+    if not isinstance(query_variant_label, str) or not query_variant_label.strip():
+        query_variant_label = "quoted"
+
+    return {
+        "source": candidate.source.value,
+        "discovery_method": candidate.discovery_method.value,
+        "query_variant_label": query_variant_label,
+        "query": collection_query,
+    }
+
+
 def _candidate_license_evidence(
     candidate: RawCandidate,
 ) -> list[tuple[LicenseEvidence, dict[str, Any]]]:
@@ -1453,6 +1513,118 @@ def _merge_json_object(existing_json: str, new_values: dict[str, Any]) -> dict[s
     if not isinstance(existing, dict):
         existing = {}
     return {**existing, **new_values}
+
+
+def _merge_document_url_source_occurrence(
+    *,
+    existing_json: str,
+    existing_source: str,
+    existing_discovery_method: str,
+    new_occurrence: dict[str, str],
+) -> dict[str, Any]:
+    existing = json.loads(existing_json) if existing_json else {}
+    if not isinstance(existing, dict):
+        existing = {}
+
+    existing_occurrences = existing.get("source_occurrences")
+    if not _valid_source_occurrences(existing_occurrences):
+        existing_occurrences = [
+            _stored_document_url_source_occurrence(
+                existing,
+                source=existing_source,
+                discovery_method=existing_discovery_method,
+            )
+        ]
+
+    return {
+        **existing,
+        "source_occurrences": _merge_source_occurrences(
+            existing_occurrences,
+            [new_occurrence],
+        ),
+    }
+
+
+def _stored_document_url_source_occurrence(
+    metadata: dict[str, Any],
+    *,
+    source: str,
+    discovery_method: str,
+) -> dict[str, str]:
+    query = metadata.get("query")
+    if not isinstance(query, str) or not query.strip():
+        query = ""
+
+    query_variant_label = metadata.get("query_variant_label")
+    if not isinstance(query_variant_label, str) or not query_variant_label.strip():
+        query_variant_label = "quoted"
+
+    return {
+        "source": source,
+        "discovery_method": discovery_method,
+        "query_variant_label": query_variant_label,
+        "query": query,
+    }
+
+
+def _merge_source_occurrences(
+    existing_occurrences: object,
+    new_occurrences: object,
+) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for occurrence in _valid_source_occurrences(existing_occurrences):
+        key = _source_occurrence_key(occurrence)
+        if key in seen:
+            continue
+        merged.append(occurrence)
+        seen.add(key)
+    for occurrence in _valid_source_occurrences(new_occurrences):
+        key = _source_occurrence_key(occurrence)
+        if key in seen:
+            continue
+        merged.append(occurrence)
+        seen.add(key)
+    return merged
+
+
+def _valid_source_occurrences(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    occurrences: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source")
+        discovery_method = item.get("discovery_method")
+        query_variant_label = item.get("query_variant_label")
+        query = item.get("query")
+        if not all(
+            isinstance(field, str) and field.strip()
+            for field in (source, discovery_method, query_variant_label, query)
+        ):
+            continue
+        occurrences.append(
+            {
+                "source": source,
+                "discovery_method": discovery_method,
+                "query_variant_label": query_variant_label,
+                "query": query,
+            }
+        )
+    return occurrences
+
+
+def _source_occurrence_key(
+    occurrence: dict[str, str],
+) -> tuple[str, str, str, str]:
+    return (
+        occurrence["source"],
+        occurrence["discovery_method"],
+        occurrence["query_variant_label"],
+        occurrence["query"],
+    )
 
 
 def _format_datetime(value: datetime) -> str:
