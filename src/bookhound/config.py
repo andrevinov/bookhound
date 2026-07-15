@@ -3,7 +3,7 @@ import os
 import tomllib
 from typing import Any
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from bookhound import __version__
 
@@ -11,6 +11,12 @@ from bookhound import __version__
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_GLOBAL_RATE_LIMIT_PER_SECOND = 5.0
 DEFAULT_PER_DOMAIN_RATE_LIMIT_PER_SECOND = 1.0
+DEFAULT_LOG_LEVEL = "WARNING"
+DEFAULT_LOG_FORMAT = "text"
+DEFAULT_LOG_DESTINATION = "stderr"
+LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+LOG_FORMATS = {"text", "json"}
+LOG_DESTINATIONS = {"stderr", "file"}
 
 
 class GoogleSourceSettings(BaseModel):
@@ -69,6 +75,47 @@ class SourceSettings(BaseModel):
     link_expansion: LinkExpansionSettings = Field(default_factory=LinkExpansionSettings)
 
 
+class LoggingSettings(BaseModel):
+    level: str = DEFAULT_LOG_LEVEL
+    format: str = DEFAULT_LOG_FORMAT
+    destination: str = DEFAULT_LOG_DESTINATION
+    file_path: Path | None = None
+
+    @field_validator("level")
+    @classmethod
+    def validate_level(cls, value: str) -> str:
+        normalized_value = value.strip().upper()
+        if normalized_value not in LOG_LEVELS:
+            raise ValueError(f"Log level must be one of {sorted(LOG_LEVELS)}.")
+        return normalized_value
+
+    @field_validator("format")
+    @classmethod
+    def validate_format(cls, value: str) -> str:
+        normalized_value = value.strip().lower()
+        if normalized_value not in LOG_FORMATS:
+            raise ValueError(f"Log format must be one of {sorted(LOG_FORMATS)}.")
+        return normalized_value
+
+    @field_validator("destination")
+    @classmethod
+    def validate_destination(cls, value: str) -> str:
+        normalized_value = value.strip().lower()
+        if normalized_value not in LOG_DESTINATIONS:
+            raise ValueError(
+                f"Log destination must be one of {sorted(LOG_DESTINATIONS)}."
+            )
+        return normalized_value
+
+    def public_dump(self) -> dict[str, str | None]:
+        return {
+            "level": self.level,
+            "format": self.format,
+            "destination": self.destination,
+            "file_path": str(self.file_path) if self.file_path is not None else None,
+        }
+
+
 class AppSettings(BaseModel):
     database_path: Path
     pdf_directory: Path
@@ -77,6 +124,7 @@ class AppSettings(BaseModel):
     global_rate_limit_per_second: float
     per_domain_rate_limit_per_second: float
     sources: SourceSettings = Field(default_factory=SourceSettings)
+    logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
     def public_dump(self) -> dict[str, Any]:
         return {
@@ -98,6 +146,7 @@ class AppSettings(BaseModel):
                 "sitemap": self.sources.sitemap.model_dump(mode="json"),
                 "link_expansion": self.sources.link_expansion.model_dump(mode="json"),
             },
+            "logging": self.logging.public_dump(),
         }
 
 
@@ -151,6 +200,7 @@ def load_settings(
         request_timeout_seconds=float(request_timeout_seconds),
         per_domain_rate_limit_per_second=float(per_domain_rate_limit_per_second),
     )
+    logging_settings = _load_logging_settings(config, root)
 
     return AppSettings(
         database_path=_resolve_path(database_path, root),
@@ -160,6 +210,7 @@ def load_settings(
         global_rate_limit_per_second=float(global_rate_limit_per_second),
         per_domain_rate_limit_per_second=float(per_domain_rate_limit_per_second),
         sources=sources,
+        logging=logging_settings,
     )
 
 
@@ -198,6 +249,55 @@ def _resolve_path(value: str | Path, project_root: Path) -> Path:
     if path.is_absolute():
         return path
     return project_root / path
+
+
+def _resolve_optional_path(value: str | Path | None, project_root: Path) -> Path | None:
+    if value is None:
+        return None
+
+    if isinstance(value, str) and not value.strip():
+        return None
+
+    return _resolve_path(value, project_root)
+
+
+def _load_logging_settings(
+    config: dict[str, Any],
+    project_root: Path,
+) -> LoggingSettings:
+    file_path = _setting_value(
+        "BOOKHOUND_LOG_FILE",
+        config,
+        ("logging", "file_path"),
+        None,
+    )
+    return LoggingSettings(
+        level=str(
+            _setting_value(
+                "BOOKHOUND_LOG_LEVEL",
+                config,
+                ("logging", "level"),
+                DEFAULT_LOG_LEVEL,
+            )
+        ),
+        format=str(
+            _setting_value(
+                "BOOKHOUND_LOG_FORMAT",
+                config,
+                ("logging", "format"),
+                DEFAULT_LOG_FORMAT,
+            )
+        ),
+        destination=str(
+            _setting_value(
+                "BOOKHOUND_LOG_DESTINATION",
+                config,
+                ("logging", "destination"),
+                DEFAULT_LOG_DESTINATION,
+            )
+        ),
+        file_path=_resolve_optional_path(file_path, project_root),
+    )
 
 
 def _load_source_settings(
